@@ -26,7 +26,7 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
 use crate::model::{DestPath, NoOpReason, ResolvedAction};
-use crate::state::{Intent, JournalAction, JournalSink, Outcome, StateError};
+use crate::state::{Intent, JournalAction, JournalSink, Outcome, Provenance, StateError};
 
 /// Whether the executor is allowed to write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,9 +47,21 @@ impl Mode {
 /// the review queue.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pending {
-    Quarantine { reason: String },
-    Recycle { reason: String, confidence: f32 },
-    Review { reason: String },
+    Quarantine {
+        reason: String,
+    },
+    Recycle {
+        reason: String,
+        confidence: f32,
+    },
+    /// `confidence` is the model's, when a model produced the proposal that
+    /// ended up here. Recorded because it is usually *why* the item is here at
+    /// all, and because a person approving it later writes it to the journal --
+    /// where dropping it would lose the number permanently.
+    Review {
+        reason: String,
+        confidence: Option<f32>,
+    },
 }
 
 /// What the executor did, or would have done.
@@ -81,6 +93,9 @@ pub struct ExecContext<'a> {
     /// journal so an entry identifies the bytes, not just a path.
     pub file_hash: Option<&'a str>,
     pub journal: &'a dyn JournalSink,
+    /// What proposed this operation and who let it through. Recorded on every
+    /// journal row; see [`crate::state::Provenance`].
+    pub provenance: Provenance,
 }
 
 impl std::fmt::Debug for ExecContext<'_> {
@@ -131,8 +146,11 @@ pub fn apply(
                 confidence: *confidence,
             }))
         }
-        ResolvedAction::NeedsManualReview { reason, .. } => {
-            Ok(Executed::Deferred(Pending::Review { reason: reason.clone() }))
+        ResolvedAction::NeedsManualReview { reason, raw, .. } => {
+            Ok(Executed::Deferred(Pending::Review {
+                reason: reason.clone(),
+                confidence: raw.confidence(),
+            }))
         }
     }
 }
@@ -172,6 +190,7 @@ pub fn relocate(
         dest: Some(dest.as_path()),
         dest_dir: Some(&parent),
         file_hash: ctx.file_hash,
+        provenance: ctx.provenance,
     };
     let op = ctx.journal.record_intent(&intent)?;
 
@@ -266,7 +285,13 @@ mod tests {
     /// A context that records nothing, for tests of the move mechanics.
     fn ctx(mode: Mode) -> ExecContext<'static> {
         const DISCARD: NoJournal = NoJournal;
-        ExecContext { profile: "test", mode, file_hash: None, journal: &DISCARD }
+        ExecContext {
+            profile: "test",
+            mode,
+            file_hash: None,
+            journal: &DISCARD,
+            provenance: Provenance::model_auto(Some(0.9)),
+        }
     }
 
     fn write(path: &Path, body: &str) {
@@ -385,6 +410,7 @@ mod tests {
         let dest = DestPath::under(dir.path(), "Invoices", "invoice.pdf").unwrap();
 
         let context = ExecContext {
+            provenance: Provenance::model_auto(Some(0.9)),
             profile: "downloads",
             mode: Mode::Execute,
             file_hash: Some("deadbeef"),
@@ -413,6 +439,7 @@ mod tests {
         write(dest.as_path(), "existing");
 
         let context = ExecContext {
+            provenance: Provenance::model_auto(Some(0.9)),
             profile: "downloads",
             mode: Mode::Execute,
             file_hash: None,
@@ -436,6 +463,7 @@ mod tests {
         let dest = DestPath::under(dir.path(), "Invoices", "invoice.pdf").unwrap();
 
         let context = ExecContext {
+            provenance: Provenance::model_auto(Some(0.9)),
             profile: "downloads",
             mode: Mode::DryRun,
             file_hash: None,

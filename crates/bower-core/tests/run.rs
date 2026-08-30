@@ -13,7 +13,7 @@ use bower_core::llm::{BatchRequest, BatchResponse, LlmBackend, LlmError};
 use bower_core::model::{Proposal, ProposalOutcome, RawProposal};
 use bower_core::run::{RunOptions, RunReport, run_profile};
 use bower_core::scan::ScanOptions;
-use bower_core::state::{ReviewKind, Store};
+use bower_core::state::{DecidedBy, Origin, ReviewKind, Store};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -410,4 +410,78 @@ fn the_holding_folder_is_never_scanned_as_input() {
 
     let second = run(&profile(&source), &Fixed::new("Documents", 0.10), &opts, &store);
     assert_eq!(second.scanned, 0, "a parked file must not be picked up again");
+}
+
+// --- journal provenance (ADR-0005) ------------------------------------------
+
+#[test]
+fn an_automatic_move_records_the_model_and_the_confidence_that_cleared_the_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    touch(&dir.path().join("a.pdf"), "body");
+
+    let report =
+        run(&profile(dir.path()), &Fixed::new("Documents", 0.93), &options(Mode::Execute), &store);
+    assert_eq!(report.moved(), 1);
+
+    let rows = store.journal_recent(None, 10).unwrap();
+    assert!(!rows.is_empty(), "an executed move must be journalled");
+    for row in &rows {
+        assert_eq!(row.provenance.origin, Origin::Model);
+        assert_eq!(
+            row.provenance.decided_by,
+            DecidedBy::Auto,
+            "nothing asked a human, so this must not claim one approved it"
+        );
+        assert_eq!(
+            row.provenance.confidence,
+            Some(0.93),
+            "the confidence that cleared the gate is the fact worth keeping"
+        );
+    }
+}
+
+#[test]
+fn a_dry_run_journals_nothing_at_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    touch(&dir.path().join("a.pdf"), "body");
+
+    run(&profile(dir.path()), &Fixed::new("Documents", 0.93), &options(Mode::DryRun), &store);
+    assert!(
+        store.journal_recent(None, 10).unwrap().is_empty(),
+        "a dry run performs no operation, so it has nothing to record"
+    );
+}
+
+#[test]
+fn an_approved_item_is_journalled_as_a_human_decision_not_an_automatic_one() {
+    // The distinction the rule engine and learned-corrections both need: the
+    // model proposed this, but it did not clear the gate on its own -- a person
+    // let it through. `action` is identical either way.
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    touch(&dir.path().join("a.pdf"), "body");
+
+    let p = profile(dir.path());
+    let report = run(&p, &Fixed::new("Documents", 0.10), &options(Mode::Execute), &store);
+    assert_eq!(report.newly_queued(), 1, "0.10 is below the threshold, so it queues");
+    assert!(store.journal_recent(None, 10).unwrap().is_empty(), "queuing executes nothing");
+
+    let item = store.review_list(None, None).unwrap().pop().unwrap();
+    bower_core::review::approve(
+        &store,
+        &item,
+        &p,
+        &bower_core::review::ResolveOptions { mode: Mode::Execute, recycle_dir: None },
+    )
+    .unwrap();
+
+    let rows = store.journal_recent(None, 10).unwrap();
+    assert!(!rows.is_empty(), "approving executes the move, which is journalled");
+    for row in &rows {
+        assert_eq!(row.provenance.origin, Origin::Model, "a model still proposed it");
+        assert_eq!(row.provenance.decided_by, DecidedBy::Human, "but a person allowed it");
+        assert_eq!(row.provenance.confidence, Some(0.10));
+    }
 }

@@ -23,7 +23,8 @@ use crate::hash;
 use crate::model::DestPath;
 use crate::policy;
 use crate::state::{
-    JournalAction, JournalSink, NoJournal, RecycleItem, ReviewItem, ReviewKind, StateError, Store,
+    JournalAction, JournalSink, NoJournal, Provenance, RecycleItem, ReviewItem, ReviewKind,
+    StateError, Store,
 };
 
 /// How many suffixed names to try when the destination is occupied.
@@ -108,10 +109,11 @@ fn context<'a>(
     mode: Mode,
     store: &'a Store,
     file_hash: Option<&'a str>,
+    provenance: Provenance,
 ) -> ExecContext<'a> {
     const DISCARD: NoJournal = NoJournal;
     let journal: &dyn JournalSink = if mode == Mode::DryRun { &DISCARD } else { store };
-    ExecContext { profile, mode, file_hash, journal }
+    ExecContext { profile, mode, file_hash, journal, provenance }
 }
 
 /// Carries out a queued decision.
@@ -161,7 +163,13 @@ fn approve_move(
         })
     })?;
 
-    let ctx = context(&profile.name, options.mode, store, Some(&item.file_hash));
+    let ctx = context(
+        &profile.name,
+        options.mode,
+        store,
+        Some(&item.file_hash),
+        Provenance::model_approved(item.confidence),
+    );
     let placed = place(&item.path, &base, JournalAction::Move, &ctx)?;
 
     if options.mode == Mode::DryRun {
@@ -192,7 +200,13 @@ fn approve_recycle(
         })
     })?;
 
-    let ctx = context(&item.profile, options.mode, store, Some(&item.file_hash));
+    let ctx = context(
+        &item.profile,
+        options.mode,
+        store,
+        Some(&item.file_hash),
+        Provenance::model_approved(item.confidence),
+    );
     let stored = place(&item.path, &base, JournalAction::Recycle, &ctx)?;
 
     if options.mode == Mode::DryRun {
@@ -266,6 +280,7 @@ fn restore_to_original(
         dest: Some(to),
         dest_dir: None,
         file_hash: None,
+        provenance: Provenance::human(),
     };
     let op = store.record_intent(&intent)?;
     match exec::move_no_clobber(from, to) {
@@ -353,6 +368,7 @@ pub fn purge(
         dest: None,
         dest_dir: None,
         file_hash: Some(&item.file_hash),
+        provenance: Provenance::human(),
     };
     let op = store.record_intent(&intent)?;
 

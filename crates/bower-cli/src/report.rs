@@ -34,7 +34,7 @@ pub(crate) fn print_run(report: &RunReport, dry_run: bool) {
                     Pending::Recycle { reason, confidence } => {
                         ("RECYCLE?", format!("{reason} (confidence {confidence:.2})"))
                     }
-                    Pending::Review { reason } => ("REVIEW", reason.clone()),
+                    Pending::Review { reason, .. } => ("REVIEW", reason.clone()),
                 };
                 println!("  {label:<9} {name}\n              {detail}");
             }

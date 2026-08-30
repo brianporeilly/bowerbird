@@ -97,6 +97,29 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX recycle_at ON recycle (recycled_at);
     "#,
+    // v2: proposal provenance on the journal.
+    //
+    // The journal is append-only, so a fact not recorded when a row is written
+    // can never be recovered later. A migration can add a column; it cannot
+    // reconstruct history that was never captured.
+    //
+    // These record distinctions that already exist today -- an automatic run
+    // versus an approved review item -- and that two planned features depend on:
+    // a rule-based fast path introduces a second thing that produces proposals,
+    // and learning from corrections requires knowing whether a person overrode
+    // a *model* or a *rule*.
+    //
+    // Rows written before this migration are marked 'unknown' rather than
+    // guessed at. Backfilling a plausible value would put a fabricated fact into
+    // the one table whose entire purpose is to be trustworthy.
+    r"
+    ALTER TABLE journal ADD COLUMN origin TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (origin IN ('model','rule','human','unknown'));
+    ALTER TABLE journal ADD COLUMN decided_by TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (decided_by IN ('auto','human','unknown'));
+    ALTER TABLE journal ADD COLUMN confidence REAL;
+    CREATE INDEX journal_origin ON journal (profile, origin);
+    ",
 ];
 
 /// The schema version this build writes.
