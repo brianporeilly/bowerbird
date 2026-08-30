@@ -55,6 +55,24 @@ pub fn validate_template(template: &str) -> Result<(), TemplateError> {
     Ok(())
 }
 
+/// The token names a template requires, in template order and deduplicated.
+///
+/// `{ext}` is excluded: it is bound to the source file's extension, not to
+/// anything the model supplies. The context builder uses this to tell the model
+/// which tokens are actually wanted, rather than leaving it to guess.
+pub fn template_tokens(template: &str) -> Result<Vec<String>, TemplateError> {
+    let mut names: Vec<String> = Vec::new();
+    for piece in parse(template)? {
+        if let Piece::Token(name) = piece
+            && name != EXT_TOKEN
+            && !names.iter().any(|n| n == name)
+        {
+            names.push(name.to_owned());
+        }
+    }
+    Ok(names)
+}
+
 /// Renders `template` against already-sanitized `tokens`.
 pub(crate) fn render(
     template: &str,
@@ -171,6 +189,18 @@ mod tests {
     fn braces_can_be_escaped() {
         let t = tokens(&[("v", "x")]);
         assert_eq!(render("{{{v}}}", &t, None).unwrap(), "{x}");
+    }
+
+    #[test]
+    fn token_names_are_extracted_in_order_without_ext() {
+        assert_eq!(
+            template_tokens("{date}-{doc_type}-{vendor}{ext}").unwrap(),
+            ["date", "doc_type", "vendor"]
+        );
+        // Repeats collapse; `{ext}` never appears.
+        assert_eq!(template_tokens("{a}-{a}{ext}").unwrap(), ["a"]);
+        assert_eq!(template_tokens("{ext}"), Ok(vec![]));
+        assert!(template_tokens("{unclosed").is_err());
     }
 
     #[test]

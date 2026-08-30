@@ -25,7 +25,7 @@
 mod sanitize;
 mod template;
 
-pub use template::{TemplateError, validate_template};
+pub use template::{TemplateError, template_tokens, validate_template};
 
 use bower_config::{OnConflict, Profile, Rename};
 use std::path::PathBuf;
