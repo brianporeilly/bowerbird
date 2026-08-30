@@ -48,6 +48,22 @@ pub struct PlanInput<'a> {
     /// The file's facts as observed *now*, immediately before deciding.
     /// `None` means it has vanished since the scan.
     pub observed: Option<FileFacts>,
+    /// What a human has already refused for this exact file.
+    pub rejected: PriorRejections<'a>,
+}
+
+/// Proposals a human has already refused for one file, looked up by the caller
+/// and handed in as data.
+///
+/// The engine consults the review queue's memory without ever acquiring a
+/// database connection, which is what lets remembered rejections work without
+/// costing the engine its purity.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PriorRejections<'a> {
+    /// Categories refused for this file's current content.
+    pub categories: &'a [String],
+    /// Whether a deletion suggestion for this content was refused.
+    pub deletion: bool,
 }
 
 /// The result of a pass through the engine.
@@ -156,6 +172,9 @@ fn plan_delete(input: &PlanInput<'_>, d: &DeleteProposal) -> Decision {
             input.outcome,
         );
     }
+    if input.rejected.deletion {
+        return Decision::Final(ResolvedAction::NoOp { reason: NoOpReason::PreviouslyRejected });
+    }
     Decision::Final(ResolvedAction::RecycleSuggested {
         reason: d.reason.clone(),
         confidence: d.confidence,
@@ -188,6 +207,13 @@ fn plan_categorize(input: &PlanInput<'_>, p: &RawProposal) -> Decision {
             );
         }
     };
+
+    // A question a human has already answered is not asked again until the file
+    // itself changes. Checked here, before any filesystem work, because the
+    // cheapest re-surfaced proposal is the one that is never built.
+    if input.rejected.categories.contains(&category) {
+        return Decision::Final(ResolvedAction::NoOp { reason: NoOpReason::PreviouslyRejected });
+    }
 
     // -- Stage 4: filename rendering ----------------------------------------
     let original_name = input.file.file_name();

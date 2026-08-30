@@ -20,7 +20,7 @@ use bower_config::{Metadata, OnConflict, Profile, Rename};
 use bower_core::model::{
     FileFacts, FileId, FileRecord, Proposal, ProposalOutcome, RawProposal, ResolvedAction,
 };
-use bower_core::policy::{self, Decision, Occupancy, PlanInput};
+use bower_core::policy::{self, Decision, Occupancy, PlanInput, PriorRejections};
 use proptest::prelude::*;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -140,8 +140,13 @@ fn drive(
     outcome: &ProposalOutcome,
     found: Occupancy,
 ) -> ResolvedAction {
-    let mut decision =
-        policy::plan(&PlanInput { file: f, outcome, profile: p, observed: Some(f.facts) });
+    let mut decision = policy::plan(&PlanInput {
+        file: f,
+        outcome,
+        profile: p,
+        observed: Some(f.facts),
+        rejected: PriorRejections::default(),
+    });
     for _ in 0..300 {
         match decision {
             Decision::Final(action) => {

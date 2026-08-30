@@ -16,7 +16,7 @@ use bower_core::model::{
     DeleteProposal, FileFacts, FileId, FileRecord, NoOpReason, Proposal, ProposalOutcome,
     RawProposal, ResolvedAction,
 };
-use bower_core::policy::{self, Decision, Occupancy, PlanInput};
+use bower_core::policy::{self, Decision, Occupancy, PlanInput, PriorRejections};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -97,8 +97,13 @@ fn resolve_with(
     outcome: &ProposalOutcome,
     mut answer: impl FnMut(&Path) -> Occupancy,
 ) -> ResolvedAction {
-    let mut decision =
-        policy::plan(&PlanInput { file: f, outcome, profile: p, observed: Some(f.facts) });
+    let mut decision = policy::plan(&PlanInput {
+        file: f,
+        outcome,
+        profile: p,
+        observed: Some(f.facts),
+        rejected: PriorRejections::default(),
+    });
     for _ in 0..200 {
         match decision {
             Decision::Final(a) => return a,
@@ -162,6 +167,7 @@ fn a_file_that_changed_since_the_scan_is_left_alone() {
         outcome: &outcome,
         profile: &profile(),
         observed: Some(changed),
+        rejected: PriorRejections::default(),
     });
     assert_eq!(decision.action(), Some(&ResolvedAction::NoOp { reason: NoOpReason::Stale }));
 }
@@ -175,6 +181,7 @@ fn a_file_that_vanished_since_the_scan_is_left_alone() {
         outcome: &outcome,
         profile: &profile(),
         observed: None,
+        rejected: PriorRejections::default(),
     });
     assert_eq!(decision.action(), Some(&ResolvedAction::NoOp { reason: NoOpReason::Stale }));
 }
@@ -479,4 +486,103 @@ fn no_action_the_engine_can_produce_is_both_automatic_and_outside_the_root() {
             }
         }
     }
+}
+
+// --- remembered rejections --------------------------------------------------
+
+/// Runs the engine with a set of previously refused proposals in hand.
+fn resolve_rejecting(
+    p: &Profile,
+    f: &FileRecord,
+    outcome: &ProposalOutcome,
+    rejected: PriorRejections<'_>,
+) -> ResolvedAction {
+    let mut decision = policy::plan(&PlanInput {
+        file: f,
+        outcome,
+        profile: p,
+        observed: Some(f.facts),
+        rejected,
+    });
+    for _ in 0..200 {
+        match decision {
+            Decision::Final(a) => return a,
+            Decision::CheckCollision(pending) => {
+                decision = policy::resolve_collision(&pending, Occupancy::Vacant);
+            }
+        }
+    }
+    panic!("collision resolution did not terminate");
+}
+
+#[test]
+fn a_proposal_a_human_already_refused_is_not_re_surfaced() {
+    let f = file("a.pdf");
+    let outcome = proposal(&f, "Documents", 0.99);
+    let refused = ["Documents".to_owned()];
+
+    assert_eq!(
+        resolve_rejecting(
+            &profile(),
+            &f,
+            &outcome,
+            PriorRejections { categories: &refused, deletion: false }
+        ),
+        ResolvedAction::NoOp { reason: NoOpReason::PreviouslyRejected }
+    );
+}
+
+#[test]
+fn refusing_one_category_does_not_refuse_another() {
+    let f = file("a.pdf");
+    let outcome = proposal(&f, "Images", 0.99);
+    let refused = ["Documents".to_owned()];
+
+    assert!(
+        matches!(
+            resolve_rejecting(
+                &profile(),
+                &f,
+                &outcome,
+                PriorRejections { categories: &refused, deletion: false }
+            ),
+            ResolvedAction::Move { .. }
+        ),
+        "a different category is a different question"
+    );
+}
+
+#[test]
+fn a_refused_deletion_is_not_suggested_again() {
+    let mut p = profile();
+    p.allow_delete_suggestions = true;
+    let f = file("a.pdf");
+
+    assert_eq!(
+        resolve_rejecting(
+            &p,
+            &f,
+            &delete(&f, 0.99),
+            PriorRejections { categories: &[], deletion: true }
+        ),
+        ResolvedAction::NoOp { reason: NoOpReason::PreviouslyRejected }
+    );
+}
+
+#[test]
+fn a_refused_category_does_not_silence_a_deletion_suggestion() {
+    let mut p = profile();
+    p.allow_delete_suggestions = true;
+    let f = file("a.pdf");
+    let refused = ["Documents".to_owned()];
+
+    assert!(matches!(
+        resolve_rejecting(
+            &p,
+            &f,
+            &delete(&f, 0.99),
+            PriorRejections { categories: &refused, deletion: false }
+        ),
+        ResolvedAction::RecycleSuggested { .. }
+    ));
 }

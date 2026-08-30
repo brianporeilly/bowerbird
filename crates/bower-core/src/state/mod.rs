@@ -231,6 +231,56 @@ impl RejectionIndex {
     }
 }
 
+/// Where the executor reports what it is about to do, and what happened.
+///
+/// A trait rather than a concrete [`Store`] so the executor keeps its own
+/// before/after discipline (ADR-0001 §2) while staying testable without a
+/// database, and so a dry run can be handed a sink that records nothing.
+pub trait JournalSink {
+    fn record_intent(&self, intent: &Intent<'_>) -> Result<OpId, StateError>;
+    fn record_result(
+        &self,
+        op: &OpId,
+        intent: &Intent<'_>,
+        outcome: &Outcome,
+    ) -> Result<(), StateError>;
+}
+
+impl JournalSink for Store {
+    fn record_intent(&self, intent: &Intent<'_>) -> Result<OpId, StateError> {
+        Self::record_intent(self, intent)
+    }
+
+    fn record_result(
+        &self,
+        op: &OpId,
+        intent: &Intent<'_>,
+        outcome: &Outcome,
+    ) -> Result<(), StateError> {
+        Self::record_result(self, op, intent, outcome)
+    }
+}
+
+/// A sink that discards everything, for dry runs and for tests of the move
+/// mechanics themselves.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoJournal;
+
+impl JournalSink for NoJournal {
+    fn record_intent(&self, _intent: &Intent<'_>) -> Result<OpId, StateError> {
+        Ok(OpId(String::from("dry-run")))
+    }
+
+    fn record_result(
+        &self,
+        _op: &OpId,
+        _intent: &Intent<'_>,
+        _outcome: &Outcome,
+    ) -> Result<(), StateError> {
+        Ok(())
+    }
+}
+
 /// The state store.
 #[derive(Debug)]
 pub struct Store {

@@ -155,6 +155,9 @@ pub enum NoOpReason {
     ConflictSkipped,
     /// A run with `dry_run = true` never executes.
     DryRun,
+    /// A human already refused this exact proposal, and the file has not
+    /// changed since.
+    PreviouslyRejected,
 }
 
 impl fmt::Display for NoOpReason {
@@ -165,6 +168,7 @@ impl fmt::Display for NoOpReason {
             Self::AlreadyInPlace => "file is already at its destination",
             Self::ConflictSkipped => "destination occupied and on_conflict = skip",
             Self::DryRun => "dry run",
+            Self::PreviouslyRejected => "this proposal was already rejected",
         };
         f.write_str(s)
     }
