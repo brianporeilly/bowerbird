@@ -70,7 +70,13 @@ jobs:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      # rusqlite's bundled SQLite compiles C, so the musl target needs a C
+      # cross-compiler. musl-tools installs it as `musl-gcc`, but cc-rs looks
+      # for `x86_64-linux-musl-gcc` first and fails before trying the fallback.
       - run: cargo build --release --target x86_64-unknown-linux-musl
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
       - name: confirm the binary is actually static
         run: |
           file target/x86_64-unknown-linux-musl/release/bower

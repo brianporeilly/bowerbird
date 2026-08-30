@@ -35,7 +35,9 @@ default_confidence_threshold = 0.75
 review_placement = "in_place"
 quarantine_dir = "/data/_review"
 
-# Required only if some profile sets allow_delete_suggestions = true.
+# Where approved deletions go. Required only if some profile sets
+# allow_delete_suggestions = true. Nothing here is destroyed until you run
+# `bower recycle purge`.
 # recycle_dir = "/data/_recycled"
 
 
