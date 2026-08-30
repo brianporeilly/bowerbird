@@ -1,0 +1,8 @@
+# Pinned to the stable channel rather than an exact version: the MSRV that
+# actually matters is `rust-version` in the workspace Cargo.toml, and CI checks
+# against it explicitly. This file exists to guarantee the components and
+# targets a contributor needs are present.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-unknown-linux-musl"]

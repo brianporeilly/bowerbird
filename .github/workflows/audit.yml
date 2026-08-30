@@ -1,0 +1,22 @@
+name: Security audit
+
+# Advisories land after a PR merges, so the dependency set is re-checked on a
+# schedule rather than only when something changes.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  push:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "deny.toml"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories

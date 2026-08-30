@@ -1,0 +1,235 @@
+//! Domain types shared by every stage of the pipeline.
+
+mod dest;
+
+pub use dest::{DestPath, PathError, split_extension};
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fmt;
+use std::path::PathBuf;
+use std::time::SystemTime;
+
+/// Opaque handle the LLM uses to refer to a file.
+///
+/// The model is never shown a filesystem path in a position where it could echo
+/// one back, so a hallucinated or attacker-influenced path cannot enter the
+/// pipeline at all -- an unrecognised `FileId` simply matches nothing.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct FileId(String);
+
+impl FileId {
+    /// Derives a stable id from a path. Stable across runs so that a rejection
+    /// recorded today still matches the same file tomorrow.
+    #[must_use]
+    pub fn for_path(path: &std::path::Path) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(path.as_os_str().as_encoded_bytes());
+        let digest = h.finalize();
+        // 8 bytes, not 4. These ids key the map that routes a batch response
+        // back to its files, so a collision would hand one file's proposal to
+        // another; 2^64 makes that unreachable, and 16 hex characters are still
+        // short enough to sit comfortably in a prompt.
+        Self(format!("f_{}", hex::encode(digest.get(..8).unwrap_or(&digest))))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for FileId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The mutable facts about a file that determine whether a proposal made
+/// earlier is still safe to act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileFacts {
+    pub size: u64,
+    pub mtime: SystemTime,
+}
+
+/// One file as observed by the scanner.
+#[derive(Debug, Clone)]
+pub struct FileRecord {
+    pub id: FileId,
+    /// Absolute path at scan time.
+    pub path: PathBuf,
+    /// Path relative to the profile's scan root.
+    pub relative: PathBuf,
+    pub facts: FileFacts,
+    /// Lowercased extension without the dot, if any.
+    pub extension: Option<String>,
+    /// MIME type from magic bytes, when `metadata.detect_mime` is on.
+    pub mime: Option<String>,
+    /// First `content_sniff_bytes` of the file as lossy UTF-8, when enabled.
+    pub content_snippet: Option<String>,
+}
+
+impl FileRecord {
+    /// The file's current name. Always present for a scanned file.
+    #[must_use]
+    pub fn file_name(&self) -> &str {
+        self.path.file_name().and_then(|n| n.to_str()).unwrap_or_default()
+    }
+}
+
+/// A categorization proposal, exactly as the LLM emitted it. Nothing here has
+/// been validated; the policy engine is what turns it into something
+/// actionable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RawProposal {
+    pub file_id: FileId,
+    pub category: String,
+    #[serde(default)]
+    pub is_new_category: bool,
+    #[serde(default)]
+    pub name_tokens: BTreeMap<String, String>,
+    pub confidence: f32,
+    pub reasoning: String,
+}
+
+/// A deletion suggestion. Held to stricter rules than categorization: it can
+/// never be auto-executed, at any confidence, under any configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeleteProposal {
+    pub file_id: FileId,
+    pub reason: String,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum Proposal {
+    Categorize(RawProposal),
+    SuggestDelete(DeleteProposal),
+}
+
+impl Proposal {
+    #[must_use]
+    pub fn file_id(&self) -> &FileId {
+        match self {
+            Self::Categorize(p) => &p.file_id,
+            Self::SuggestDelete(p) => &p.file_id,
+        }
+    }
+
+    #[must_use]
+    pub fn confidence(&self) -> f32 {
+        match self {
+            Self::Categorize(p) => p.confidence,
+            Self::SuggestDelete(p) => p.confidence,
+        }
+    }
+}
+
+/// What came back for one file: either a usable proposal, or a description of
+/// why nothing usable came back. Malformed entries are per-item, so one bad
+/// entry in a batch does not sink the rest.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProposalOutcome {
+    Ok(Proposal),
+    /// Schema or parse failure that survived the retry.
+    Malformed {
+        detail: String,
+    },
+    /// The batch response contained no entry for this file at all.
+    Missing,
+}
+
+/// Why a file ended up doing nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoOpReason {
+    /// The file changed or vanished between scan and decision.
+    Stale,
+    /// An identical file (same content hash) already sits at the destination.
+    DuplicateOfDestination,
+    /// The file is already exactly where it would be moved to.
+    AlreadyInPlace,
+    /// `on_conflict = "skip"` and something different occupies the destination.
+    ConflictSkipped,
+    /// A run with `dry_run = true` never executes.
+    DryRun,
+}
+
+impl fmt::Display for NoOpReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Stale => "file changed or vanished since it was scanned",
+            Self::DuplicateOfDestination => "an identical file already exists at the destination",
+            Self::AlreadyInPlace => "file is already at its destination",
+            Self::ConflictSkipped => "destination occupied and on_conflict = skip",
+            Self::DryRun => "dry run",
+        };
+        f.write_str(s)
+    }
+}
+
+/// The closed set of things the pipeline can actually do.
+///
+/// There is deliberately no variant that expresses permanent deletion, and
+/// every variant that writes carries a [`DestPath`], which cannot point outside
+/// a profile's destination root. Unsafe operations are therefore not merely
+/// rejected at runtime -- they cannot be named.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedAction {
+    /// Move, keeping the original filename.
+    Move {
+        dest: DestPath,
+    },
+    /// Move and rename per the profile's filename template.
+    MoveAndRename {
+        dest: DestPath,
+    },
+    /// Park for a human decision: a conflict, not a deletion.
+    Quarantine {
+        reason: String,
+    },
+    /// Recorded for human review. Never executed automatically, at any
+    /// confidence.
+    RecycleSuggested {
+        reason: String,
+        confidence: f32,
+    },
+    /// Something the engine would not decide on its own.
+    NeedsManualReview {
+        reason: String,
+        raw: Box<ProposalOutcome>,
+    },
+    NoOp {
+        reason: NoOpReason,
+    },
+}
+
+impl ResolvedAction {
+    /// Whether this action is one the executor will perform without asking.
+    #[must_use]
+    pub fn is_automatic(&self) -> bool {
+        matches!(self, Self::Move { .. } | Self::MoveAndRename { .. })
+    }
+
+    /// Whether this action puts a row in the review queue, which is what drives
+    /// the "needs human attention" exit code.
+    #[must_use]
+    pub fn needs_attention(&self) -> bool {
+        matches!(
+            self,
+            Self::Quarantine { .. }
+                | Self::RecycleSuggested { .. }
+                | Self::NeedsManualReview { .. }
+        )
+    }
+
+    #[must_use]
+    pub fn dest(&self) -> Option<&DestPath> {
+        match self {
+            Self::Move { dest } | Self::MoveAndRename { dest } => Some(dest),
+            _ => None,
+        }
+    }
+}
