@@ -357,6 +357,23 @@ fn match_declared(declared: &[String], proposed: &str) -> Option<String> {
         .cloned()
 }
 
+/// Resolves a proposed category against a profile, returning the spelling to
+/// actually use, or `None` if the profile does not permit it.
+///
+/// Public because approving a queued decision has to ask the same question a
+/// run does, against the config as it stands *now*: a category removed from the
+/// profile since the proposal was made must not be filed into just because a
+/// row remembers it.
+#[must_use]
+pub fn resolve_category(profile: &Profile, proposed: &str) -> Option<String> {
+    let normalized = sanitize::category(proposed)?;
+    match match_declared(&profile.categories, &normalized) {
+        Some(declared) => Some(declared),
+        None if profile.allow_dynamic_categories => Some(normalized),
+        None => None,
+    }
+}
+
 /// Routes a file to a human. Used by the stages that fail before a destination
 /// exists, so there is nothing to propose.
 fn review(reason: impl Into<String>, raw: &ProposalOutcome) -> Decision {

@@ -1,7 +1,18 @@
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing,
+        clippy::duration_suboptimal_units
+    )
+)]
 //! `bower` -- the Bowerbird command-line interface.
 
 mod cli;
 mod report;
+mod triage;
 
 use anyhow::{Context, Result, bail};
 use bower_config::{Config, Profile, Rename};
@@ -48,21 +59,23 @@ fn dispatch(cli: &Cli) -> Result<u8> {
             ConfigCommand::Check => cmd_config_check(cli.config.as_deref()),
         },
         Command::Review { command } => {
-            let what = match command {
-                ReviewCommand::List => "review list",
-                ReviewCommand::Show { .. } => "review show",
-                ReviewCommand::Approve { .. } => "review approve",
-                ReviewCommand::Reject { .. } => "review reject",
-            };
-            bail!("`{what}` needs the review queue, which lands with the SQLite state store")
+            let config = load(&resolve_config_path(cli.config.as_deref())?)?;
+            let store = open_store(&config)?;
+            match command {
+                ReviewCommand::List(args) => triage::list(&store, args),
+                ReviewCommand::Show { id } => triage::show(&store, *id),
+                ReviewCommand::Approve(args) => triage::approve(&store, &config, args),
+                ReviewCommand::Reject(args) => triage::reject(&store, &config, args),
+            }
         }
         Command::Recycle { command } => {
-            let what = match command {
-                RecycleCommand::List => "recycle list",
-                RecycleCommand::Restore { .. } => "recycle restore",
-                RecycleCommand::Purge => "recycle purge",
-            };
-            bail!("`{what}` needs the recycle store, which lands with the SQLite state store")
+            let config = load(&resolve_config_path(cli.config.as_deref())?)?;
+            let store = open_store(&config)?;
+            match command {
+                RecycleCommand::List => triage::recycle_list(&store),
+                RecycleCommand::Restore { id } => triage::recycle_restore(&store, &config, *id),
+                RecycleCommand::Purge(args) => triage::recycle_purge(&store, &config, args),
+            }
         }
     }
 }

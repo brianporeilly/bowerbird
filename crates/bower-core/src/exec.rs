@@ -199,7 +199,7 @@ pub fn relocate(
 }
 
 /// Moves `src` to `dest`, failing rather than replacing anything already there.
-fn move_no_clobber(src: &Path, dest: &Path) -> Result<(), ExecError> {
+pub(crate) fn move_no_clobber(src: &Path, dest: &Path) -> Result<(), ExecError> {
     match fs::hard_link(src, dest) {
         Ok(()) => fs::remove_file(src).map_err(|source| ExecError::Io {
             op: "remove source after linking",

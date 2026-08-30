@@ -14,6 +14,7 @@ pub mod llm;
 pub mod lock;
 pub mod model;
 pub mod policy;
+pub mod review;
 pub mod run;
 pub mod scan;
 pub mod state;
