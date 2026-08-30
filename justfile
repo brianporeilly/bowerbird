@@ -45,10 +45,21 @@ deny:
 # cc-rs looks for `x86_64-linux-musl-gcc` before falling back, so point it at
 # whatever the distro actually installed.
 release-static:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # CC_ only, for cc-rs to compile the bundled SQLite amalgamation. Do not
+    # also set CARGO_TARGET_..._LINKER: that makes musl-gcc the linker driver,
+    # which links against /lib/ld-musl-x86_64.so.1 and quietly costs us the
+    # static binary that is the whole point of this target.
     CC_x86_64_unknown_linux_musl="${CC_x86_64_unknown_linux_musl:-musl-gcc}" \
-    CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="${CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER:-musl-gcc}" \
-    cargo build --release --target x86_64-unknown-linux-musl
-    @ls -lh target/x86_64-unknown-linux-musl/release/bower
+        cargo build --release --target x86_64-unknown-linux-musl
+    bin=target/x86_64-unknown-linux-musl/release/bower
+    ls -lh "$bin"
+    file "$bin"
+    if readelf -l "$bin" | grep -q INTERP; then
+        echo "error: binary requires a dynamic interpreter; it is not static" >&2
+        exit 1
+    fi
 
 # Check the MSRV declared in Cargo.toml still builds.
 msrv:

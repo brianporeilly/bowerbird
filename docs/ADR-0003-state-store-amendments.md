@@ -171,3 +171,30 @@ explicitly.
 `bundled` is still the right choice: it is what makes the shipped binary
 genuinely self-contained, and linking the host's libsqlite3 would trade a build
 dependency for a runtime one on every machine the binary lands on.
+
+### Do not also override the linker
+
+Setting `CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc` alongside
+`CC_` seems like the obvious companion change. It is not: it makes `musl-gcc`
+the linker *driver*, which links against `/lib/ld-musl-x86_64.so.1` and costs us
+the static binary that is this target's entire purpose. `rustc`'s own
+self-contained linking is what produces `static-pie`; `CC_` is only needed so
+`cc-rs` can compile the SQLite amalgamation. Set `CC_` alone.
+
+Measured, on the same tree:
+
+| Linker | `file` says |
+| ------ | ----------- |
+| rustc self-contained (`CC_` only) | `static-pie linked` |
+| `musl-gcc` driver (`CC_` + `..._LINKER`) | `dynamically linked, interpreter /lib/ld-musl-x86_64.so.1` |
+
+### `ldd` cannot verify this
+
+The original CI assertion grepped `ldd` output for `=>`. A musl-dynamic binary
+with no shared library dependencies still reports `statically linked`, so that
+check passes on a binary that cannot run without an interpreter — it reported
+success on exactly the regression above.
+
+The load-bearing check is the absence of a `PT_INTERP` program header
+(`readelf -l | grep INTERP`), and the proof is running the binary: a runner with
+no musl loader executes a genuinely static one and fails a dynamic one.

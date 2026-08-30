@@ -73,15 +73,29 @@ jobs:
       # rusqlite's bundled SQLite compiles C, so the musl target needs a C
       # cross-compiler. musl-tools installs it as `musl-gcc`, but cc-rs looks
       # for `x86_64-linux-musl-gcc` first and fails before trying the fallback.
+      #
+      # CC_ only. Setting CARGO_TARGET_..._LINKER as well makes musl-gcc the
+      # linker driver, which links against /lib/ld-musl-x86_64.so.1 and silently
+      # costs us the static binary. rustc's own self-contained linking is what
+      # produces static-pie, so leave it alone.
       - run: cargo build --release --target x86_64-unknown-linux-musl
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
       - name: confirm the binary is actually static
+        # `ldd` is not sufficient: a musl-dynamic binary with no shared library
+        # dependencies still reports "statically linked", so grepping for `=>`
+        # passes on a binary that needs an interpreter at runtime. The load-
+        # bearing check is the absence of a PT_INTERP header. Running it is the
+        # proof: this runner has no musl loader.
         run: |
-          file target/x86_64-unknown-linux-musl/release/bower
-          ! ldd target/x86_64-unknown-linux-musl/release/bower 2>/dev/null | grep -q '=>' \
-            || (echo "binary is dynamically linked" && exit 1)
+          BIN=target/x86_64-unknown-linux-musl/release/bower
+          file "$BIN"
+          if readelf -l "$BIN" | grep -q INTERP; then
+            echo "::error::binary requires a dynamic interpreter; it is not static"
+            readelf -l "$BIN" | grep -A1 INTERP
+            exit 1
+          fi
+          "$BIN" --version
 
   deny:
     name: cargo-deny
