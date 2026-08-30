@@ -586,3 +586,56 @@ fn a_refused_category_does_not_silence_a_deletion_suggestion() {
         ResolvedAction::RecycleSuggested { .. }
     ));
 }
+
+// --- what a deferred decision remembers -------------------------------------
+
+#[test]
+fn a_file_held_back_by_the_confidence_gate_remembers_where_it_was_going() {
+    // Approving this days later must not require re-running the pipeline, and
+    // above all must not require asking the model again.
+    let f = file("a.pdf");
+    let outcome = proposal(&f, "documents", 0.10);
+
+    match resolve(&profile(), &f, &outcome, Occupancy::Vacant) {
+        ResolvedAction::NeedsManualReview { proposed, .. } => {
+            let dest = proposed.expect("the gate is the one stage that has a settled destination");
+            assert_eq!(
+                dest.category(),
+                "Documents",
+                "the resolved spelling, not the model's, so approval files it where a \
+                 confident run would have"
+            );
+            assert_eq!(dest.filename(), "a.pdf");
+        }
+        other => panic!("expected review, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_proposal_that_failed_before_path_construction_proposes_nothing() {
+    let f = file("a.pdf");
+    // An undeclared category never reaches a destination.
+    let outcome = proposal(&f, "Invoices", 0.99);
+
+    match resolve(&profile(), &f, &outcome, Occupancy::Vacant) {
+        ResolvedAction::NeedsManualReview { proposed, .. } => {
+            assert!(proposed.is_none(), "there is nothing honest to propose");
+        }
+        other => panic!("expected review, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_quarantined_conflict_remembers_the_destination_it_could_not_take() {
+    let f = file("a.pdf");
+    let outcome = proposal(&f, "Documents", 0.99);
+
+    match resolve(&profile(), &f, &outcome, Occupancy::Different) {
+        ResolvedAction::Quarantine { proposed, .. } => {
+            let dest = proposed.expect("the collision names a destination");
+            assert_eq!(dest.filename(), "a.pdf");
+            assert_eq!(dest.category(), "Documents");
+        }
+        other => panic!("expected quarantine, got {other:?}"),
+    }
+}

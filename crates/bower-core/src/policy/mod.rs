@@ -289,6 +289,7 @@ pub fn resolve_collision(pending: &PendingMove, found: Occupancy) -> Decision {
                     "a different file already exists at {}",
                     pending.dest.as_path().display()
                 ),
+                proposed: Some(pending.dest.clone()),
             }),
             OnConflict::Suffix => next_suffix(pending),
         },
@@ -304,6 +305,10 @@ pub fn resolve_collision(pending: &PendingMove, found: Occupancy) -> Decision {
                     raw: Box::new(ProposalOutcome::Ok(Proposal::Categorize(
                         pending.proposal.clone(),
                     ))),
+                    // This proposal cleared every stage but the gate, so the
+                    // destination is settled and approval is a replay rather
+                    // than a fresh decision.
+                    proposed: Some(pending.dest.clone()),
                 });
             }
             let dest = pending.dest.clone();
@@ -324,6 +329,7 @@ fn next_suffix(pending: &PendingMove) -> Decision {
                 "gave up after {MAX_SUFFIX_ATTEMPTS} suffixed names were all taken at {}",
                 pending.dest.parent_dir().display()
             ),
+            proposed: Some(pending.base.clone()),
         });
     }
     match pending.base.with_suffix(attempt) {
@@ -335,6 +341,7 @@ fn next_suffix(pending: &PendingMove) -> Decision {
         })),
         Err(e) => Decision::Final(ResolvedAction::Quarantine {
             reason: format!("could not build a suffixed destination path: {e}"),
+            proposed: Some(pending.base.clone()),
         }),
     }
 }
@@ -350,9 +357,12 @@ fn match_declared(declared: &[String], proposed: &str) -> Option<String> {
         .cloned()
 }
 
+/// Routes a file to a human. Used by the stages that fail before a destination
+/// exists, so there is nothing to propose.
 fn review(reason: impl Into<String>, raw: &ProposalOutcome) -> Decision {
     Decision::Final(ResolvedAction::NeedsManualReview {
         reason: reason.into(),
         raw: Box::new(raw.clone()),
+        proposed: None,
     })
 }

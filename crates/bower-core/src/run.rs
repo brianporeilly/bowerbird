@@ -251,6 +251,7 @@ fn decide_and_execute(
                 if rounds > MAX_COLLISION_ROUNDS {
                     break ResolvedAction::Quarantine {
                         reason: "collision resolution did not converge".to_owned(),
+                        proposed: None,
                     };
                 }
                 let found = match occupancy(pending.dest.as_path(), hasher) {
@@ -260,6 +261,7 @@ fn decide_and_execute(
                             file,
                             ResolvedAction::Quarantine {
                                 reason: format!("could not inspect the destination: {e}"),
+                                proposed: None,
                             },
                             e.to_string(),
                         );
@@ -331,8 +333,8 @@ fn defer(
     }
 
     let current = parked_at.as_deref().unwrap_or(&file.path);
-    let category = action.dest().map_or("", DestPath::category);
-    let proposed_dest = action.dest().map(DestPath::as_path);
+    let category = action.proposed_dest().map_or("", DestPath::category);
+    let proposed_dest = action.proposed_dest().map(DestPath::as_path);
 
     let queued = store.enqueue_review(&NewReviewItem {
         profile: &profile.name,
@@ -401,9 +403,8 @@ fn reasoning_of(action: &ResolvedAction) -> &str {
             },
             _ => "",
         },
-        ResolvedAction::RecycleSuggested { reason, .. } | ResolvedAction::Quarantine { reason } => {
-            reason
-        }
+        ResolvedAction::RecycleSuggested { reason, .. }
+        | ResolvedAction::Quarantine { reason, .. } => reason,
         _ => "",
     }
 }

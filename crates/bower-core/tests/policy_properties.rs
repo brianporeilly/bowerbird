@@ -150,7 +150,11 @@ fn drive(
     for _ in 0..300 {
         match decision {
             Decision::Final(action) => {
-                if let Some(dest) = action.dest() {
+                // `proposed_dest` is the wider net: it covers destinations a
+                // deferred decision merely remembers, which a human may later
+                // approve into a real move. Those must be as contained as the
+                // ones the executor acts on immediately.
+                if let Some(dest) = action.proposed_dest() {
                     assert_contained(dest.as_path());
                 }
                 return action;

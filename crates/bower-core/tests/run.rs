@@ -16,7 +16,7 @@ use bower_core::scan::ScanOptions;
 use bower_core::state::{ReviewKind, Store};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 /// A backend that proposes one fixed category at one fixed confidence, so the
@@ -33,6 +33,9 @@ impl Fixed {
 }
 
 impl LlmBackend for Fixed {
+    // The trait ties the lifetime to `&self` so backends can name themselves
+    // from config; this one is a literal.
+    #[allow(clippy::unnecessary_literal_bound)]
     fn name(&self) -> &str {
         "fixed"
     }
@@ -157,12 +160,8 @@ fn a_low_confidence_file_lands_in_the_review_queue_with_its_context() {
     let store = Store::open_in_memory().unwrap();
     touch(&dir.path().join("a.pdf"), "body");
 
-    let report = run(
-        &profile(dir.path()),
-        &Fixed::new("Documents", 0.10),
-        &options(Mode::Execute),
-        &store,
-    );
+    let report =
+        run(&profile(dir.path()), &Fixed::new("Documents", 0.10), &options(Mode::Execute), &store);
 
     assert_eq!(report.attention_count(), 1);
     assert_eq!(report.newly_queued(), 1);
@@ -210,12 +209,8 @@ fn a_rejected_proposal_is_not_re_surfaced_while_the_file_is_unchanged() {
         .remember_rejection("downloads", ReviewKind::Review, &digest, size, "Documents", None)
         .unwrap();
 
-    let report = run(
-        &profile(dir.path()),
-        &Fixed::new("Documents", 0.99),
-        &options(Mode::Execute),
-        &store,
-    );
+    let report =
+        run(&profile(dir.path()), &Fixed::new("Documents", 0.99), &options(Mode::Execute), &store);
 
     assert_eq!(report.moved(), 0, "a refused proposal must not be acted on");
     assert_eq!(report.attention_count(), 0, "nor asked again");
@@ -239,12 +234,8 @@ fn changing_the_file_makes_the_question_fresh_again() {
     // the hash is what actually decides.
     touch(&path, "BODY");
 
-    let report = run(
-        &profile(dir.path()),
-        &Fixed::new("Documents", 0.99),
-        &options(Mode::Execute),
-        &store,
-    );
+    let report =
+        run(&profile(dir.path()), &Fixed::new("Documents", 0.99), &options(Mode::Execute), &store);
     assert_eq!(report.moved(), 1, "a different file is a different question");
 }
 
@@ -261,12 +252,8 @@ fn a_rejection_in_one_profile_does_not_silence_another() {
         .remember_rejection("someone-else", ReviewKind::Review, &digest, size, "Documents", None)
         .unwrap();
 
-    let report = run(
-        &profile(dir.path()),
-        &Fixed::new("Documents", 0.99),
-        &options(Mode::Execute),
-        &store,
-    );
+    let report =
+        run(&profile(dir.path()), &Fixed::new("Documents", 0.99), &options(Mode::Execute), &store);
     assert_eq!(report.moved(), 1);
 }
 
@@ -424,5 +411,3 @@ fn the_holding_folder_is_never_scanned_as_input() {
     let second = run(&profile(&source), &Fixed::new("Documents", 0.10), &opts, &store);
     assert_eq!(second.scanned, 0, "a parked file must not be picked up again");
 }
-
-fn _unused(_: PathBuf) {}

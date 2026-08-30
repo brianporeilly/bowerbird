@@ -122,7 +122,7 @@ pub fn apply(
             relocate(source, dest, JournalAction::MoveAndRename, ctx)
         }
         ResolvedAction::NoOp { reason } => Ok(Executed::Nothing { reason: reason.clone() }),
-        ResolvedAction::Quarantine { reason } => {
+        ResolvedAction::Quarantine { reason, .. } => {
             Ok(Executed::Deferred(Pending::Quarantine { reason: reason.clone() }))
         }
         ResolvedAction::RecycleSuggested { reason, confidence } => {
