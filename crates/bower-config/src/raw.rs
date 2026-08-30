@@ -8,7 +8,7 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
-use crate::{OnConflict, Provider, ReviewPlacement};
+use crate::{OnConflict, Provider, ReviewPlacement, StructuredOutput};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -72,6 +72,8 @@ pub(crate) struct RawBackend {
     pub timeout_secs: u64,
     #[serde(default = "default_retries")]
     pub max_retries: u32,
+    #[serde(default)]
+    pub structured_output: StructuredOutput,
 }
 
 #[derive(Debug, Deserialize)]

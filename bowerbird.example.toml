@@ -54,6 +54,22 @@ model = "llama-3.1-8b-instruct"
 timeout_secs = 30
 max_retries = 2
 
+# How this endpoint is asked to return JSON. Per backend, because one install
+# routinely talks to both a cloud API and a local server.
+#
+#   "prompt"       (default) Ask for JSON in the prompt and parse the reply.
+#                  Sends no `response_format`, so it works against anything.
+#   "json_object"  response_format: {"type": "json_object"}. Supported by
+#                  recent llama.cpp, Ollama, vLLM, and the OpenAI API.
+#   "json_schema"  A strict schema. The most reliable where supported.
+#
+# The default is the weakest on purpose: an endpoint that does not recognise
+# `response_format` usually rejects the whole request, so a stronger default
+# would fail on first contact with exactly the self-hosted servers this tool
+# targets. Raise it once you know what your server supports -- it measurably
+# reduces how often a batch needs the reformat retry.
+structured_output = "prompt"
+
 [[llm_backends]]
 name = "anthropic-cloud"
 provider = "anthropic_compatible"
@@ -62,6 +78,7 @@ api_key_env = "ANTHROPIC_API_KEY"
 model = "claude-haiku-4-5"
 timeout_secs = 30
 max_retries = 2
+structured_output = "json_schema"
 
 
 # --- Profiles -----------------------------------------------------------------
