@@ -24,6 +24,8 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     /// Scan, classify, and organize.
     Run(RunArgs),
+    /// Show what has actually been done, from the journal.
+    Journal(JournalArgs),
     /// Inspect the configuration without running anything.
     Config {
         #[command(subcommand)]
@@ -69,6 +71,8 @@ pub(crate) struct RunArgs {
 pub(crate) enum ConfigCommand {
     /// Validate the config and print the profiles it defines.
     Check,
+    /// Write a starter config, prefilled for this machine.
+    Init(InitArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -149,4 +153,31 @@ pub(crate) struct PurgeArgs {
     /// Skip the confirmation prompt.
     #[arg(long, short = 'y')]
     pub(crate) yes: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct JournalArgs {
+    /// Restrict to one profile.
+    #[arg(long)]
+    pub(crate) profile: Option<String>,
+    /// How many rows to show, newest first.
+    #[arg(long, default_value_t = 20)]
+    pub(crate) limit: usize,
+    /// Show only operations that failed, and intents with no result -- the
+    /// signature of a crash partway through an operation.
+    #[arg(long)]
+    pub(crate) failed: bool,
+    /// Only rows newer than this, e.g. 30d, 2w, 12h.
+    #[arg(long)]
+    pub(crate) since: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct InitArgs {
+    /// Where to write it. Defaults to ~/.config/bowerbird/config.toml.
+    #[arg(long)]
+    pub(crate) path: Option<std::path::PathBuf>,
+    /// Overwrite an existing file.
+    #[arg(long)]
+    pub(crate) force: bool,
 }

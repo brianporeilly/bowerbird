@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Opaque handle the LLM uses to refer to a file.
 ///
@@ -52,6 +52,42 @@ impl fmt::Display for FileId {
 pub struct FileFacts {
     pub size: u64,
     pub mtime: SystemTime,
+}
+
+impl FileFacts {
+    /// The file's mtime as `YYYY-MM-DD`, in UTC.
+    ///
+    /// This backs the `{date}` filename token. It lives here, next to the fact
+    /// it reports, because the engine fills that token itself rather than
+    /// asking the model for it -- see `policy::template`.
+    ///
+    /// A clock before the epoch yields `1970-01-01` rather than an error. A
+    /// filename is not the place to surface a broken timestamp, and the
+    /// alternative is sending the file to manual review over something no
+    /// human reviewing it could act on.
+    #[must_use]
+    pub fn modified_date(&self) -> String {
+        let secs = self.mtime.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let (y, m, d) = civil_from_days(i64::try_from(secs / 86_400).unwrap_or(0));
+        format!("{y:04}-{m:02}-{d:02}")
+    }
+}
+
+/// Howard Hinnant's `civil_from_days`, the standard branch-free conversion from
+/// a days-since-epoch count to a proleptic Gregorian date. Used so that a date
+/// token needs no date crate.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, u32::try_from(m).unwrap_or(1), u32::try_from(d).unwrap_or(1))
 }
 
 /// One file as observed by the scanner.

@@ -264,17 +264,52 @@ fn renaming_off_keeps_the_original_name() {
     }
 }
 
+/// 2024-03-15, as seconds since the epoch.
+const MARCH_2024: std::time::Duration = std::time::Duration::from_secs(19_797 * 86_400);
+
+/// A file whose bytes talked the model into proposing a date cannot get that
+/// date into the filename: `{date}` is the engine's, taken from the mtime.
 #[test]
-fn renaming_on_fills_the_template_and_reports_the_rename() {
+fn a_model_supplied_date_cannot_reach_the_filename() {
     let mut p = profile();
-    p.rename = Rename::Enabled { template: "{date}-{doc_type}-{vendor}{ext}".to_owned() };
-    let f = file("scan001.pdf");
+    p.rename = Rename::Enabled { template: "{date}-{vendor}{ext}".to_owned() };
+    let mut f = file("scan001.pdf");
+    f.facts.mtime = SystemTime::UNIX_EPOCH + MARCH_2024;
 
     let outcome = ProposalOutcome::Ok(Proposal::Categorize(RawProposal {
         file_id: f.id.clone(),
         category: "Documents".to_owned(),
         is_new_category: false,
-        name_tokens: [("date", "2024-03-15"), ("doc_type", "invoice"), ("vendor", "Acme Corp")]
+        name_tokens: [("date", "1999-12-31"), ("vendor", "Acme")]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect(),
+        confidence: 0.99,
+        reasoning: String::new(),
+    }));
+
+    match resolve(&p, &f, &outcome, Occupancy::Vacant) {
+        ResolvedAction::MoveAndRename { dest } => {
+            assert_eq!(dest.filename(), "2024-03-15-Acme.pdf", "the engine's date must win");
+        }
+        other => panic!("expected a rename, got {other:?}"),
+    }
+}
+
+#[test]
+fn renaming_on_fills_the_template_and_reports_the_rename() {
+    let mut p = profile();
+    p.rename = Rename::Enabled { template: "{date}-{doc_type}-{vendor}{ext}".to_owned() };
+    let mut f = file("scan001.pdf");
+    f.facts.mtime = SystemTime::UNIX_EPOCH + MARCH_2024;
+
+    // No `date` token: the engine fills `{date}` from the file's mtime, and the
+    // model is never asked for one.
+    let outcome = ProposalOutcome::Ok(Proposal::Categorize(RawProposal {
+        file_id: f.id.clone(),
+        category: "Documents".to_owned(),
+        is_new_category: false,
+        name_tokens: [("doc_type", "invoice"), ("vendor", "Acme Corp")]
             .into_iter()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect(),

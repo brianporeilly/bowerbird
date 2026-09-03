@@ -70,21 +70,38 @@ label in the allowed set" — is a different proof with a different shape. What
 generalizes is the *discipline* (pure policy, closed action space, journal
 everything), and discipline does not live in a crate.
 
-### Open: decouple `bower-llm` from the filesystem domain
+### Done: `bower-llm` is decoupled from the filesystem domain
 
-`BatchRequest` currently takes `&Profile` and `&[FileRecord]`, so the crate that
-should only know how to talk to models knows what a file is. The context builder
-already renders a record into a prompt payload; the adapter could take *that*
-plus the taxonomy instead.
+`LlmBackend::classify` now takes a `BatchContext` — what the core has already
+decided the model may see — rather than a `BatchRequest` carrying `&Profile` and
+`&[FileRecord]`. `context::build` runs on the core side of the port.
 
-Worth doing **on today's merits** — it removes a dependency that should not
-exist and makes the adapter independently testable — not as speculative
-groundwork. It happens to be the seam a second target would need, which is a
-reason to prefer this shape, not a reason to do it now.
+A backend can no longer widen disclosure: not by convention, but because the
+type does not carry the data. `bower-llm` no longer references `Profile` or
+`FileRecord`. It still depends on `bower-config` for `Backend`, `Provider`, and
+`StructuredOutput`, which are a backend's own settings and legitimately its
+business.
 
-Deliberately not done yet: it is a refactor across the adapter, the context
-builder, and their tests, and three milestone branches are still unreviewed.
-Doing it now would churn code nobody has read.
+Done on its own merits, as argued here: it removed a dependency that should not
+have existed. It happens to be the seam a second target would need, which was a
+reason to prefer this shape, not a reason to have done it sooner. See
+[ADR-0006](ADR-0006-engine-tokens-and-the-backend-port.md).
+
+### Open: a model-proposed date token
+
+`{date}` is now filled by the engine from the file's mtime, because the model is
+never told a timestamp and a date it supplied would be one it invented
+([ADR-0006](ADR-0006-engine-tokens-and-the-backend-port.md)).
+
+That means `{date}` always means *when the file was written*, never *the date on
+the document*. For an invoice or a scanned letter, the second is usually what a
+person wants in the filename.
+
+The honest fix is a distinct model-proposed token — say `{doc_date}` — read out
+of the content excerpt, kept separate from the engine's so the two can never be
+confused. **Evidence that would settle it:** someone renaming documents and
+finding mtime is the wrong date often enough to care. Not built, because nothing
+yet needs it and a second date token is a thing users will get wrong.
 
 ---
 
@@ -182,7 +199,8 @@ overwrite"** is a capability it must require, not assume.
    no new abstraction. Provenance groundwork is already in place.
 2. **Note-vault support** — as a richer context builder for the filesystem
    target, correctly understood as a feature rather than a second target.
-3. **`bower-llm` decoupling**, on its own merits, once the branches are reviewed.
+3. ~~**`bower-llm` decoupling**, on its own merits, once the branches are reviewed.~~
+   Done — see above.
 4. **Mail** only if a second domain becomes a real goal — and it is the one that
    would genuinely reshape the abstraction, which is exactly why it should not
    be approached casually.

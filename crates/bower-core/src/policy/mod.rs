@@ -225,7 +225,12 @@ fn plan_categorize(input: &PlanInput<'_>, p: &RawProposal) -> Decision {
                 .iter()
                 .filter_map(|(k, v)| sanitize::token(v).map(|v| (k.clone(), v)))
                 .collect();
-            match template::render(template, &tokens, input.file.extension.as_deref()) {
+            match template::render(
+                template,
+                &tokens,
+                input.file.extension.as_deref(),
+                &input.file.facts.modified_date(),
+            ) {
                 Ok(name) => {
                     let renamed = name != original_name;
                     (name, renamed)

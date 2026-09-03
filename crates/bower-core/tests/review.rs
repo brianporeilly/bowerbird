@@ -8,8 +8,9 @@
 //! Resolving pending decisions, against real directories and a real store.
 
 use bower_config::{Metadata, OnConflict, Profile, Rename, ReviewPlacement};
+use bower_core::context::BatchContext;
 use bower_core::exec::Mode;
-use bower_core::llm::{BatchRequest, BatchResponse, LlmBackend, LlmError};
+use bower_core::llm::{BatchResponse, LlmBackend, LlmError};
 use bower_core::model::{DeleteProposal, Proposal, ProposalOutcome, RawProposal};
 use bower_core::review::{self, Approved, ResolveError, ResolveOptions};
 use bower_core::run::{RunOptions, run_profile};
@@ -43,12 +44,12 @@ impl LlmBackend for Backend {
         "test"
     }
 
-    fn classify(&self, request: BatchRequest<'_>) -> Result<BatchResponse, LlmError> {
+    fn classify(&self, ctx: &BatchContext) -> Result<BatchResponse, LlmError> {
         let mut outcomes = BTreeMap::new();
-        for file in request.files {
+        for file in &ctx.files {
             let proposal = match &self.category {
                 Some(category) => Proposal::Categorize(RawProposal {
-                    file_id: file.id.clone(),
+                    file_id: file.file_id.clone(),
                     category: category.clone(),
                     is_new_category: false,
                     name_tokens: BTreeMap::new(),
@@ -56,12 +57,12 @@ impl LlmBackend for Backend {
                     reasoning: "test".to_owned(),
                 }),
                 None => Proposal::SuggestDelete(DeleteProposal {
-                    file_id: file.id.clone(),
+                    file_id: file.file_id.clone(),
                     reason: "looks like a duplicate installer".to_owned(),
                     confidence: self.confidence,
                 }),
             };
-            outcomes.insert(file.id.clone(), ProposalOutcome::Ok(proposal));
+            outcomes.insert(file.file_id.clone(), ProposalOutcome::Ok(proposal));
         }
         Ok(BatchResponse { outcomes })
     }

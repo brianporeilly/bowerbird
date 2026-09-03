@@ -98,7 +98,7 @@ fn classify<'a>(
     profile: &'a Profile,
     files: &'a [FileRecord],
 ) -> Result<bower_core::llm::BatchResponse, bower_core::llm::LlmError> {
-    adapter.classify(BatchRequest { profile, files })
+    adapter.classify(&bower_core::context::build(BatchRequest { profile, files }))
 }
 
 fn is_ok(outcome: &ProposalOutcome) -> bool {
@@ -225,7 +225,9 @@ fn transport_retries_do_not_consume_the_reformat() {
     config.endpoint = server.endpoint();
 
     let adapter = OpenAiBackend::new(&config).with_backoff(Duration::ZERO);
-    let response = adapter.classify(BatchRequest { profile: &profile(), files: &files }).unwrap();
+    let response = adapter
+        .classify(&bower_core::context::build(BatchRequest { profile: &profile(), files: &files }))
+        .unwrap();
 
     assert!(is_ok(&response.outcome_for(&files[0].id)));
     assert_eq!(server.request_count(), 3, "two transport retries, zero reformats");
@@ -243,7 +245,14 @@ fn a_429_is_retried_but_a_400_is_not() {
     ]);
     config.endpoint = server.endpoint();
     let adapter = OpenAiBackend::new(&config).with_backoff(Duration::ZERO);
-    assert!(adapter.classify(BatchRequest { profile: &profile(), files: &files }).is_ok());
+    assert!(
+        adapter
+            .classify(&bower_core::context::build(BatchRequest {
+                profile: &profile(),
+                files: &files
+            }))
+            .is_ok()
+    );
     assert_eq!(server.request_count(), 2, "429 means come back");
 
     let mut config = backend(String::new());
@@ -252,7 +261,7 @@ fn a_429_is_retried_but_a_400_is_not() {
     config.endpoint = server.endpoint();
     let adapter = OpenAiBackend::new(&config).with_backoff(Duration::ZERO);
     let err = adapter
-        .classify(BatchRequest { profile: &profile(), files: &files })
+        .classify(&bower_core::context::build(BatchRequest { profile: &profile(), files: &files }))
         .expect_err("a 400 is fatal");
 
     assert_eq!(server.request_count(), 1, "repeating a rejected request will not help");
@@ -271,7 +280,7 @@ fn a_missing_api_key_fails_before_anything_is_sent() {
     let adapter = OpenAiBackend::new(&config);
 
     let err = adapter
-        .classify(BatchRequest { profile: &profile(), files: &files })
+        .classify(&bower_core::context::build(BatchRequest { profile: &profile(), files: &files }))
         .expect_err("no key, no request");
 
     assert!(err.to_string().contains("BOWER_TEST_KEY_DEFINITELY_UNSET"));
@@ -298,7 +307,7 @@ fn the_key_is_sent_as_a_bearer_token_and_never_appears_in_an_error() {
         .with_key_source(|_| Some(SECRET.to_owned()));
 
     let err = adapter
-        .classify(BatchRequest { profile: &profile(), files: &files })
+        .classify(&bower_core::context::build(BatchRequest { profile: &profile(), files: &files }))
         .expect_err("401 is fatal");
     let rendered = format!("{err} / {err:?}");
 
@@ -320,7 +329,14 @@ fn a_blank_credential_is_treated_as_missing() {
     config.api_key_env = Some("BOWER_TEST_KEY".to_owned());
 
     let adapter = OpenAiBackend::new(&config).with_key_source(|_| Some("   ".to_owned()));
-    assert!(adapter.classify(BatchRequest { profile: &profile(), files: &files }).is_err());
+    assert!(
+        adapter
+            .classify(&bower_core::context::build(BatchRequest {
+                profile: &profile(),
+                files: &files
+            }))
+            .is_err()
+    );
     assert_eq!(server.request_count(), 0);
 }
 
@@ -341,7 +357,12 @@ fn structured_output_decides_whether_response_format_is_sent() {
         config.structured_output = mode;
 
         let adapter = OpenAiBackend::new(&config).with_backoff(Duration::ZERO);
-        adapter.classify(BatchRequest { profile: &profile(), files: &files }).unwrap();
+        adapter
+            .classify(&bower_core::context::build(BatchRequest {
+                profile: &profile(),
+                files: &files,
+            }))
+            .unwrap();
 
         let sent = server.requests()[0].json();
         match expected {
@@ -362,7 +383,7 @@ fn the_json_schema_mode_sends_a_strict_schema() {
     let mut config = backend(server.endpoint());
     config.structured_output = StructuredOutput::JsonSchema;
     OpenAiBackend::new(&config)
-        .classify(BatchRequest { profile: &profile(), files: &files })
+        .classify(&bower_core::context::build(BatchRequest { profile: &profile(), files: &files }))
         .unwrap();
 
     let sent = server.requests()[0].json();

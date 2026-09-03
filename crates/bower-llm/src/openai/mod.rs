@@ -22,8 +22,8 @@ pub mod parse;
 pub mod prompt;
 
 use bower_config::{Backend, StructuredOutput};
-use bower_core::context;
-use bower_core::llm::{BatchRequest, BatchResponse, LlmBackend, LlmError};
+use bower_core::context::BatchContext;
+use bower_core::llm::{BatchResponse, LlmBackend, LlmError};
 use bower_core::model::{FileId, ProposalOutcome};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -235,24 +235,23 @@ impl LlmBackend for OpenAiBackend {
         &self.name
     }
 
-    fn classify(&self, request: BatchRequest<'_>) -> Result<BatchResponse, LlmError> {
-        if request.files.is_empty() {
+    fn classify(&self, ctx: &BatchContext) -> Result<BatchResponse, LlmError> {
+        if ctx.files.is_empty() {
             return Ok(BatchResponse::default());
         }
 
         let key = self.api_key()?;
-        let ctx = context::build(request);
-        let expected: BTreeSet<FileId> = request.files.iter().map(|f| f.id.clone()).collect();
+        let expected: BTreeSet<FileId> = ctx.files.iter().map(|f| f.file_id.clone()).collect();
 
         let mut messages = vec![
-            json!({ "role": "system", "content": prompt::system_prompt(&ctx) }),
-            json!({ "role": "user", "content": prompt::user_payload(&ctx) }),
+            json!({ "role": "system", "content": prompt::system_prompt(ctx) }),
+            json!({ "role": "user", "content": prompt::user_payload(ctx) }),
         ];
 
         tracing::debug!(
             backend = %self.name,
             model = %self.model,
-            files = request.files.len(),
+            files = ctx.files.len(),
             "classifying batch"
         );
 

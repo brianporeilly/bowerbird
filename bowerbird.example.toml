@@ -151,10 +151,14 @@ on_conflict = "quarantine"
 
 [profiles.rename]
 enabled = true
-# `{token}` is filled from the model's name_tokens; `{ext}` is the source
-# file's extension including the dot. A token the model does not supply sends
-# the file to review rather than filing it under a name with a hole in it.
-# Syntax is provisional -- see ADR-0001, Open Questions.
+# `{ext}` and `{date}` are filled by Bowerbird from the file itself -- the
+# extension including the dot, and the mtime as YYYY-MM-DD. The model is never
+# asked for them and cannot override them: it is never told the file's date, so
+# a date it supplied would be one it made up.
+#
+# Every other `{token}` comes from the model's name_tokens. One it does not
+# supply sends the file to review rather than filing it under a name with a
+# hole in it. Syntax is provisional -- see ADR-0001, Open Questions.
 template = "{date}-{doc_type}-{vendor}{ext}"
 
 [profiles.metadata]

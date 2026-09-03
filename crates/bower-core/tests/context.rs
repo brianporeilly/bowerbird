@@ -169,8 +169,29 @@ fn filename_tokens_are_disclosed_only_when_renaming_is_on() {
     let ctx = build(&p, &[rich_record("a.pdf")]);
     assert_eq!(
         ctx.filename_tokens.as_deref(),
-        Some(["date".to_owned(), "doc_type".to_owned(), "vendor".to_owned()].as_slice()),
+        Some(["doc_type".to_owned(), "vendor".to_owned()].as_slice()),
         "the model should be told which tokens are wanted, not left to guess"
+    );
+}
+
+/// `{date}` and `{ext}` are filled by the engine from the file itself, and the
+/// context deliberately discloses no timestamp. Asking the model for a date it
+/// was never given is asking it to invent one, and an invented date in a
+/// filename is indistinguishable from a true one.
+#[test]
+fn the_model_is_never_asked_for_an_engine_filled_token() {
+    let mut p = profile();
+    p.rename = Rename::Enabled { template: "{date}-{vendor}{ext}".to_owned() };
+    let ctx = build(&p, &[rich_record("a.pdf")]);
+
+    let wanted = ctx.filename_tokens.clone().unwrap_or_default();
+    assert!(!wanted.iter().any(|t| t == "date"), "date is the engine's: {wanted:?}");
+    assert!(!wanted.iter().any(|t| t == "ext"), "ext is the engine's: {wanted:?}");
+
+    let serialized = serde_json::to_string(&ctx).unwrap();
+    assert!(
+        !serialized.contains("mtime") && !serialized.contains("modified"),
+        "no timestamp should reach the model: {serialized}"
     );
 }
 

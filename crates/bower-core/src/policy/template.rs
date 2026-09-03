@@ -6,9 +6,12 @@
 //! `"{date}-{doc_type}-{vendor}{ext}"`, so that the rest of the pipeline can be
 //! built and tested:
 //!
-//! * `{name}` is replaced by the sanitized token `name`.
-//! * `{ext}` is replaced by the source file's extension *including* the dot, or
-//!   by nothing when the file has no extension.
+//! * `{ext}` and `{date}` are *engine tokens*: filled from the source file
+//!   itself, never from model output. `{ext}` is the extension including the
+//!   dot, or nothing when the file has no extension; `{date}` is the file's
+//!   mtime as `YYYY-MM-DD`.
+//! * Every other token, such as `{name}`, is replaced by the sanitized value
+//!   the model supplied under that name.
 //! * `{{` and `}}` are literal braces.
 //! * A token the model did not supply is an error, not an empty string. There
 //!   is deliberately no fallback syntax yet; a file whose template cannot be
@@ -21,6 +24,22 @@ use super::sanitize;
 
 /// Token bound to the source file's extension rather than to model output.
 const EXT_TOKEN: &str = "ext";
+
+/// Token bound to the source file's mtime rather than to model output.
+///
+/// A date is a fact the scanner already holds, and the model is never told it
+/// (see `context::FileContext`), so asking for one would be asking it to
+/// invent a value that lands in a filename looking exactly as authoritative as
+/// a true one. The engine fills it instead, and `template_tokens` does not ask
+/// the model for it.
+const DATE_TOKEN: &str = "date";
+
+/// Whether `name` is filled by the engine from the file rather than by the
+/// model. Engine tokens are excluded from what the model is asked to supply,
+/// and a model that volunteers one anyway is ignored.
+fn is_engine_token(name: &str) -> bool {
+    name == EXT_TOKEN || name == DATE_TOKEN
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TemplateError {
@@ -43,6 +62,8 @@ pub enum TemplateError {
 pub fn validate_template(template: &str) -> Result<(), TemplateError> {
     let mut token_count = 0usize;
     for piece in parse(template)? {
+        // `{date}` counts: it varies per file, so a template of `{date}{ext}`
+        // is not the constant name this check exists to reject.
         if let Piece::Token(name) = piece
             && name != EXT_TOKEN
         {
@@ -57,14 +78,14 @@ pub fn validate_template(template: &str) -> Result<(), TemplateError> {
 
 /// The token names a template requires, in template order and deduplicated.
 ///
-/// `{ext}` is excluded: it is bound to the source file's extension, not to
+/// Engine tokens are excluded: they are bound to the source file, not to
 /// anything the model supplies. The context builder uses this to tell the model
 /// which tokens are actually wanted, rather than leaving it to guess.
 pub fn template_tokens(template: &str) -> Result<Vec<String>, TemplateError> {
     let mut names: Vec<String> = Vec::new();
     for piece in parse(template)? {
         if let Piece::Token(name) = piece
-            && name != EXT_TOKEN
+            && !is_engine_token(name)
             && !names.iter().any(|n| n == name)
         {
             names.push(name.to_owned());
@@ -74,10 +95,15 @@ pub fn template_tokens(template: &str) -> Result<Vec<String>, TemplateError> {
 }
 
 /// Renders `template` against already-sanitized `tokens`.
+///
+/// `extension` and `date` are the engine's, taken from the source file. They
+/// take precedence over anything the model supplied under the same name, so a
+/// model cannot put its own date into a filename by proposing a `date` token.
 pub(crate) fn render(
     template: &str,
     tokens: &BTreeMap<String, String>,
     extension: Option<&str>,
+    date: &str,
 ) -> Result<String, TemplateError> {
     let mut out = String::new();
     for piece in parse(template)? {
@@ -89,6 +115,7 @@ pub(crate) fn render(
                     out.push_str(ext);
                 }
             }
+            Piece::Token(DATE_TOKEN) => out.push_str(date),
             Piece::Token(name) => {
                 let value =
                     tokens.get(name).ok_or_else(|| TemplateError::MissingToken(name.to_owned()))?;
@@ -159,43 +186,60 @@ mod tests {
         pairs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect()
     }
 
+    const DATE: &str = "2024-03-15";
+
     #[test]
     fn renders_the_adr_example() {
-        let t = tokens(&[("date", "2024-03-15"), ("doc_type", "invoice"), ("vendor", "Acme")]);
-        let out = render("{date}-{doc_type}-{vendor}{ext}", &t, Some("pdf")).unwrap();
+        let t = tokens(&[("doc_type", "invoice"), ("vendor", "Acme")]);
+        let out = render("{date}-{doc_type}-{vendor}{ext}", &t, Some("pdf"), DATE).unwrap();
         assert_eq!(out, "2024-03-15-invoice-Acme.pdf");
+    }
+
+    /// The engine's date wins. A model that proposes a `date` token -- whether
+    /// it read one out of the file or invented it -- cannot put it in the name.
+    #[test]
+    fn a_model_supplied_date_is_ignored() {
+        let t = tokens(&[("date", "1999-12-31"), ("vendor", "Acme")]);
+        let out = render("{date}-{vendor}", &t, None, DATE).unwrap();
+        assert_eq!(out, "2024-03-15-Acme");
+    }
+
+    #[test]
+    fn the_date_token_needs_nothing_from_the_model() {
+        let out = render("{date}{ext}", &tokens(&[]), Some("pdf"), DATE).unwrap();
+        assert_eq!(out, "2024-03-15.pdf");
     }
 
     #[test]
     fn ext_token_vanishes_for_extensionless_files() {
         let t = tokens(&[("vendor", "Acme")]);
-        assert_eq!(render("{vendor}{ext}", &t, None).unwrap(), "Acme");
+        assert_eq!(render("{vendor}{ext}", &t, None, DATE).unwrap(), "Acme");
     }
 
     #[test]
     fn a_missing_token_is_an_error_not_a_hole() {
-        let t = tokens(&[("date", "2024-03-15")]);
-        let err = render("{date}-{vendor}", &t, None).unwrap_err();
+        let t = tokens(&[]);
+        let err = render("{date}-{vendor}", &t, None, DATE).unwrap_err();
         assert_eq!(err, TemplateError::MissingToken("vendor".to_owned()));
     }
 
     #[test]
     fn a_template_that_renders_an_unsafe_name_is_rejected() {
         let t = tokens(&[("a", "x"), ("b", "y")]);
-        assert!(matches!(render("{a}/{b}", &t, None), Err(TemplateError::UnusableResult(_))));
+        assert!(matches!(render("{a}/{b}", &t, None, DATE), Err(TemplateError::UnusableResult(_))));
     }
 
     #[test]
     fn braces_can_be_escaped() {
         let t = tokens(&[("v", "x")]);
-        assert_eq!(render("{{{v}}}", &t, None).unwrap(), "{x}");
+        assert_eq!(render("{{{v}}}", &t, None, DATE).unwrap(), "{x}");
     }
 
     #[test]
-    fn token_names_are_extracted_in_order_without_ext() {
+    fn token_names_are_extracted_in_order_without_engine_tokens() {
         assert_eq!(
             template_tokens("{date}-{doc_type}-{vendor}{ext}").unwrap(),
-            ["date", "doc_type", "vendor"]
+            ["doc_type", "vendor"]
         );
         // Repeats collapse; `{ext}` never appears.
         assert_eq!(template_tokens("{a}-{a}{ext}").unwrap(), ["a"]);

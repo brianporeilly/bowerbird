@@ -140,7 +140,10 @@ pub fn run_profile(
     };
 
     for batch in scanned.files.chunks(profile.batch_size) {
-        let response = backend.classify(BatchRequest { profile, files: batch })?;
+        // The context builder runs here, not inside the backend: what the model
+        // may see is a policy decision and stays on this side of the port.
+        let ctx = crate::context::build(BatchRequest { profile, files: batch });
+        let response = backend.classify(&ctx)?;
         for file in batch {
             report.outcomes.push(handle_file(
                 file,
