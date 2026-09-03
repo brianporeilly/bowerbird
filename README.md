@@ -244,9 +244,14 @@ Deferred by design — see [ADR-0001](docs/ADR-0001-bowerbird-architecture.md):
 watcher daemon, notifications, TUI/GUI front-ends, media-library conventions.
 
 [ADR-0002](docs/ADR-0002-implementation-amendments.md),
-[ADR-0003](docs/ADR-0003-state-store-amendments.md), and
-[ADR-0004](docs/ADR-0004-structured-output-and-the-openai-adapter.md) record
-where the implementation amends ADR-0001, and why.
+[ADR-0003](docs/ADR-0003-state-store-amendments.md),
+[ADR-0004](docs/ADR-0004-structured-output-and-the-openai-adapter.md), and
+[ADR-0005](docs/ADR-0005-journal-provenance.md) record where the implementation
+amends ADR-0001, and why.
+
+[ROADMAP.md](docs/ROADMAP.md) holds the longer view: what is decided, what is
+open, and the reasoning behind both. It is direction rather than commitment, and
+it exists so settled questions are not re-argued from scratch.
 
 ## License
 

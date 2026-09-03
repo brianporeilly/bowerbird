@@ -8,9 +8,13 @@
 //! The SQLite state store: journal, review queue, rejections, recycle.
 
 use bower_core::state::{
-    Intent, JournalAction, NewReviewItem, Outcome, ReviewKind, StateError, Store,
+    DecidedBy, Intent, JournalAction, NewReviewItem, Origin, Outcome, Provenance, ReviewKind,
+    StateError, Store,
 };
 use std::path::Path;
+
+/// The schema version this build writes. Bump deliberately, with the migration.
+const CURRENT_SCHEMA: u32 = 2;
 
 fn store() -> Store {
     Store::open_in_memory().unwrap()
@@ -24,6 +28,7 @@ fn intent<'a>(profile: &'a str, source: &'a Path, dest: &'a Path, dir: &'a Path)
         dest: Some(dest),
         dest_dir: Some(dir),
         file_hash: Some("abc123"),
+        provenance: Provenance::model_auto(Some(0.87)),
     }
 }
 
@@ -31,7 +36,9 @@ fn intent<'a>(profile: &'a str, source: &'a Path, dest: &'a Path, dir: &'a Path)
 
 #[test]
 fn a_fresh_store_is_migrated_to_the_current_version() {
-    assert_eq!(store().schema_version().unwrap(), 1);
+    // A literal on purpose: adding a migration should require deliberately
+    // updating this, so a schema change can never happen by accident.
+    assert_eq!(store().schema_version().unwrap(), CURRENT_SCHEMA);
 }
 
 #[test]
@@ -44,7 +51,7 @@ fn reopening_an_existing_store_is_a_no_op() {
     drop(first);
 
     let second = Store::open(&path).unwrap();
-    assert_eq!(second.schema_version().unwrap(), 1);
+    assert_eq!(second.schema_version().unwrap(), CURRENT_SCHEMA);
     assert!(!second.rejections_for("p").unwrap().is_empty(), "data must survive a reopen");
 }
 
@@ -72,7 +79,7 @@ fn a_store_from_a_newer_release_is_refused_rather_than_downgraded() {
     match Store::open(&path) {
         Err(StateError::FromTheFuture { found, supported }) => {
             assert_eq!(found, 99);
-            assert_eq!(supported, 1);
+            assert_eq!(supported, CURRENT_SCHEMA);
         }
         other => panic!("expected a refusal, got {other:?}"),
     }
@@ -380,4 +387,129 @@ fn the_same_stored_path_cannot_be_claimed_twice() {
         s.record_recycled("p", Path::new("/b"), Path::new("/r/a"), "h", "").is_err(),
         "two files must never map onto one slot in the recycle store"
     );
+}
+
+// --- provenance (schema v2) -------------------------------------------------
+
+/// A file written by a v1 build, complete with a journal row. Used to prove the
+/// migration is applied to real data rather than only to empty files.
+fn write_v1_store(path: &std::path::Path) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE journal (
+            id          INTEGER PRIMARY KEY,
+            op_id       TEXT    NOT NULL,
+            phase       TEXT    NOT NULL CHECK (phase IN ('intent','committed','failed')),
+            at          INTEGER NOT NULL,
+            profile     TEXT    NOT NULL,
+            action      TEXT    NOT NULL,
+            source      TEXT    NOT NULL,
+            dest        TEXT,
+            dest_dir    TEXT,
+            file_hash   TEXT,
+            detail      TEXT
+        );
+        CREATE TABLE review_queue (
+            id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, profile TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('review','recycle','quarantine')),
+            path TEXT NOT NULL, original_path TEXT NOT NULL, file_hash TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT '', proposed_dest TEXT,
+            reasoning TEXT NOT NULL DEFAULT '', confidence REAL,
+            reason TEXT NOT NULL DEFAULT ''
+        );
+        CREATE UNIQUE INDEX review_queue_identity
+            ON review_queue (profile, original_path, file_hash, kind);
+        CREATE TABLE rejections (
+            id INTEGER PRIMARY KEY, rejected_at INTEGER NOT NULL, profile TEXT NOT NULL,
+            kind TEXT NOT NULL, file_hash TEXT NOT NULL,
+            file_size INTEGER NOT NULL DEFAULT 0,
+            category TEXT NOT NULL DEFAULT '', reason TEXT
+        );
+        CREATE UNIQUE INDEX rejections_identity
+            ON rejections (profile, file_hash, kind, category);
+        CREATE TABLE recycle (
+            id INTEGER PRIMARY KEY, recycled_at INTEGER NOT NULL, profile TEXT NOT NULL,
+            original_path TEXT NOT NULL, stored_path TEXT NOT NULL UNIQUE,
+            file_hash TEXT NOT NULL, reason TEXT NOT NULL DEFAULT ''
+        );
+        INSERT INTO journal (op_id, phase, at, profile, action, source, dest)
+        VALUES ('op-from-v1', 'committed', 1000, 'downloads', 'move', '/a.pdf', '/D/a.pdf');",
+    )
+    .unwrap();
+    conn.pragma_update(None, "user_version", 1u32).unwrap();
+}
+
+#[test]
+fn a_v1_file_migrates_without_losing_its_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    write_v1_store(&path);
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA);
+
+    let rows = store.journal_recent(None, 10).unwrap();
+    assert_eq!(rows.len(), 1, "the v1 row must survive the migration");
+    assert_eq!(rows[0].op_id, "op-from-v1");
+}
+
+#[test]
+fn rows_predating_provenance_say_unknown_rather_than_guessing() {
+    // The journal's value is that it is trustworthy. Backfilling a plausible
+    // origin onto rows written before the column existed would put a fabricated
+    // fact into the one table that must never contain one.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    write_v1_store(&path);
+
+    let store = Store::open(&path).unwrap();
+    let row = store.journal_recent(None, 10).unwrap().pop().unwrap();
+
+    assert_eq!(row.provenance.origin, Origin::Unknown);
+    assert_eq!(row.provenance.decided_by, DecidedBy::Unknown);
+    assert_eq!(row.provenance.confidence, None);
+}
+
+#[test]
+fn a_recorded_intent_carries_its_provenance_to_both_rows() {
+    let s = store();
+    let src = Path::new("/data/downloads/a.pdf");
+    let dst = Path::new("/data/downloads/Documents/a.pdf");
+    let dir = Path::new("/data/downloads/Documents");
+
+    let intent = Intent {
+        provenance: Provenance::model_auto(Some(0.91)),
+        ..intent("downloads", src, dst, dir)
+    };
+    let op = s.record_intent(&intent).unwrap();
+    s.record_result(&op, &intent, &Outcome::Committed).unwrap();
+
+    let rows = s.journal_recent(Some("downloads"), 10).unwrap();
+    assert_eq!(rows.len(), 2, "an intent and its result");
+    for row in &rows {
+        assert_eq!(row.provenance.origin, Origin::Model);
+        assert_eq!(row.provenance.decided_by, DecidedBy::Auto);
+        assert_eq!(row.provenance.confidence, Some(0.91));
+    }
+}
+
+#[test]
+fn human_initiated_operations_are_distinguishable_from_model_proposals() {
+    // The whole point: a move that a person asked for and a move a model
+    // proposed look identical in `action`, and must not in the journal.
+    let s = store();
+    let src = Path::new("/recycled/a.pdf");
+    let dst = Path::new("/data/a.pdf");
+    let dir = Path::new("/data");
+
+    let by_model =
+        Intent { provenance: Provenance::model_auto(Some(0.8)), ..intent("p", src, dst, dir) };
+    let by_human = Intent { provenance: Provenance::human(), ..intent("p", src, dst, dir) };
+    s.record_intent(&by_model).unwrap();
+    s.record_intent(&by_human).unwrap();
+
+    let origins: Vec<_> =
+        s.journal_recent(Some("p"), 10).unwrap().iter().map(|r| r.provenance.origin).collect();
+    assert!(origins.contains(&Origin::Model));
+    assert!(origins.contains(&Origin::Human));
 }

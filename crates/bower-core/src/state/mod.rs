@@ -89,6 +89,130 @@ pub struct Intent<'a> {
     /// which directories a profile manages.
     pub dest_dir: Option<&'a Path>,
     pub file_hash: Option<&'a str>,
+    /// What proposed this, and who let it through.
+    pub provenance: Provenance,
+}
+
+/// What produced a proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// A model proposed it.
+    Model,
+    /// A deterministic rule matched and no model was consulted. Not yet
+    /// produced by any code path; the value exists so the rule-based fast path
+    /// does not require a second migration.
+    Rule,
+    /// A person initiated it directly, as with a restore or a purge.
+    Human,
+    /// Written before the journal recorded provenance. Never written by this
+    /// build -- only read back from rows predating schema v2.
+    Unknown,
+}
+
+/// Who allowed an operation to proceed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecidedBy {
+    /// Cleared the confidence gate and executed without asking anyone.
+    Auto,
+    /// A person approved it through `bower review`.
+    Human,
+    /// Predates schema v2. See [`Origin::Unknown`].
+    Unknown,
+}
+
+/// Why an operation happened, recorded alongside what happened.
+///
+/// Kept separate from [`JournalAction`] because they answer different
+/// questions: the action is *what* the executor did, the provenance is *what
+/// asked for it*. A move looks identical whether a model proposed it, a rule
+/// matched it, or a person approved it, and later analysis needs to tell those
+/// apart.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Provenance {
+    pub origin: Origin,
+    pub decided_by: DecidedBy,
+    /// The proposal's confidence, when a model produced one.
+    pub confidence: Option<f32>,
+}
+
+impl Provenance {
+    /// A model proposed it and it cleared the confidence gate unattended.
+    #[must_use]
+    pub fn model_auto(confidence: Option<f32>) -> Self {
+        Self { origin: Origin::Model, decided_by: DecidedBy::Auto, confidence }
+    }
+
+    /// A model proposed it and a person approved it through `bower review`.
+    #[must_use]
+    pub fn model_approved(confidence: Option<f32>) -> Self {
+        Self { origin: Origin::Model, decided_by: DecidedBy::Human, confidence }
+    }
+
+    /// A person initiated it directly: a restore or a purge, which no model
+    /// ever proposed.
+    #[must_use]
+    pub fn human() -> Self {
+        Self { origin: Origin::Human, decided_by: DecidedBy::Human, confidence: None }
+    }
+}
+
+/// One row read back from the journal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JournalRow {
+    pub op_id: String,
+    /// `intent`, `committed`, or `failed`.
+    pub phase: String,
+    /// Unix seconds.
+    pub at: i64,
+    pub profile: String,
+    pub action: String,
+    pub source: PathBuf,
+    pub dest: Option<PathBuf>,
+    pub provenance: Provenance,
+    pub detail: Option<String>,
+}
+
+impl Origin {
+    /// Anything unrecognised reads back as [`Origin::Unknown`]. A row written by
+    /// a future release with a value this build has never heard of is still a
+    /// row worth showing; refusing to read the journal because one field is
+    /// unfamiliar would be worse than admitting the field is unfamiliar.
+    fn from_str(s: &str) -> Self {
+        match s {
+            "model" => Self::Model,
+            "rule" => Self::Rule,
+            "human" => Self::Human,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::Rule => "rule",
+            Self::Human => "human",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl DecidedBy {
+    /// See [`Origin::from_str`] for why an unrecognised value is tolerated.
+    fn from_str(s: &str) -> Self {
+        match s {
+            "auto" => Self::Auto,
+            "human" => Self::Human,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Human => "human",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 /// Handle linking an intent to its outcome.
@@ -331,8 +455,9 @@ impl Store {
         let op = next_op_id();
         self.conn.execute(
             "INSERT INTO journal
-               (op_id, phase, at, profile, action, source, dest, dest_dir, file_hash)
-             VALUES (?1, 'intent', ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+               (op_id, phase, at, profile, action, source, dest, dest_dir, file_hash,
+                origin, decided_by, confidence)
+             VALUES (?1, 'intent', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 op.as_str(),
                 now_secs(),
@@ -342,6 +467,9 @@ impl Store {
                 intent.dest.map(path_str),
                 intent.dest_dir.map(path_str),
                 intent.file_hash,
+                intent.provenance.origin.as_str(),
+                intent.provenance.decided_by.as_str(),
+                intent.provenance.confidence,
             ],
         )?;
         Ok(op)
@@ -361,8 +489,9 @@ impl Store {
         };
         self.conn.execute(
             "INSERT INTO journal
-               (op_id, phase, at, profile, action, source, dest, dest_dir, file_hash, detail)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+               (op_id, phase, at, profile, action, source, dest, dest_dir, file_hash, detail,
+                origin, decided_by, confidence)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 op.as_str(),
                 phase,
@@ -374,6 +503,9 @@ impl Store {
                 intent.dest_dir.map(path_str),
                 intent.file_hash,
                 detail,
+                intent.provenance.origin.as_str(),
+                intent.provenance.decided_by.as_str(),
+                intent.provenance.confidence,
             ],
         )?;
         Ok(())
@@ -446,6 +578,46 @@ impl Store {
         )?;
         let rows =
             stmt.query_map(params![profile, kind.map(ReviewKind::as_str)], review_from_row)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Journal rows, newest first.
+    ///
+    /// The journal is the record of what the tool actually did and why. Reading
+    /// it back is what makes provenance more than a write-only column: it is
+    /// how "which of these did a model choose, and how sure was it?" gets
+    /// answered.
+    pub fn journal_recent(
+        &self,
+        profile: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<JournalRow>, StateError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT op_id, phase, at, profile, action, source, dest,
+                    origin, decided_by, confidence, detail
+             FROM journal
+             WHERE (?1 IS NULL OR profile = ?1)
+             ORDER BY at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let rows =
+            stmt.query_map(params![profile, i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
+                Ok(JournalRow {
+                    op_id: row.get(0)?,
+                    phase: row.get(1)?,
+                    at: row.get(2)?,
+                    profile: row.get(3)?,
+                    action: row.get(4)?,
+                    source: PathBuf::from(row.get::<_, String>(5)?),
+                    dest: row.get::<_, Option<String>>(6)?.map(PathBuf::from),
+                    provenance: Provenance {
+                        origin: Origin::from_str(&row.get::<_, String>(7)?),
+                        decided_by: DecidedBy::from_str(&row.get::<_, String>(8)?),
+                        confidence: row.get(9)?,
+                    },
+                    detail: row.get(10)?,
+                })
+            })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 

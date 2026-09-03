@@ -142,6 +142,20 @@ pub enum ProposalOutcome {
     Missing,
 }
 
+impl ProposalOutcome {
+    /// The model's confidence, when there is a usable proposal at all.
+    ///
+    /// `None` for a malformed or absent entry: those have no confidence, and
+    /// reporting one would invent a number the model never gave.
+    #[must_use]
+    pub fn confidence(&self) -> Option<f32> {
+        match self {
+            Self::Ok(p) => Some(p.confidence()),
+            Self::Malformed { .. } | Self::Missing => None,
+        }
+    }
+}
+
 /// Why a file ended up doing nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoOpReason {

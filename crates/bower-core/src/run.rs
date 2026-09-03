@@ -18,8 +18,8 @@ use crate::model::{DestPath, FileFacts, FileRecord, ResolvedAction};
 use crate::policy::{self, Decision, Occupancy, PlanInput, PriorRejections};
 use crate::scan::{self, ScanError, ScanOptions, Skipped};
 use crate::state::{
-    JournalAction, JournalSink, NewReviewItem, NoJournal, RejectionIndex, ReviewKind, StateError,
-    Store,
+    JournalAction, JournalSink, NewReviewItem, NoJournal, Provenance, RejectionIndex, ReviewKind,
+    StateError, Store,
 };
 
 /// Guards against a pathological `on_conflict = "suffix"` loop. The policy
@@ -163,10 +163,20 @@ fn context<'a>(
     options: &RunOptions,
     store: &'a Store,
     file_hash: Option<&'a str>,
+    confidence: Option<f32>,
 ) -> ExecContext<'a> {
     const DISCARD: NoJournal = NoJournal;
     let journal: &dyn JournalSink = if options.mode == Mode::DryRun { &DISCARD } else { store };
-    ExecContext { profile: &profile.name, mode: options.mode, file_hash, journal }
+    ExecContext {
+        profile: &profile.name,
+        mode: options.mode,
+        file_hash,
+        journal,
+        // Anything reaching the executor from a run cleared the confidence gate
+        // on its own; a queued item that a person approved is journalled from
+        // `review`, which records `model_approved` instead.
+        provenance: Provenance::model_auto(confidence),
+    }
 }
 
 /// Content hash computed at most once per file, and only if something actually
@@ -243,10 +253,14 @@ fn decide_and_execute(
     // check back here. `on_conflict = "suffix"` walks candidate names, so this
     // is a loop rather than a single round trip.
     let mut rounds = 0u32;
+    let mut confidence: Option<f32> = None;
     let action = loop {
         match decision {
             Decision::Final(action) => break action,
             Decision::CheckCollision(pending) => {
+                // The action the loop breaks with carries no confidence, so
+                // remember what the gate was given while it is still in hand.
+                confidence = Some(pending.confidence);
                 rounds += 1;
                 if rounds > MAX_COLLISION_ROUNDS {
                     break ResolvedAction::Quarantine {
@@ -275,7 +289,7 @@ fn decide_and_execute(
     // Owned rather than borrowed from `hasher`, which `defer` still needs
     // mutably in order to hash a file nothing has read yet.
     let known_hash = hasher.peek().map(str::to_owned);
-    let ctx = context(profile, options, store, known_hash.as_deref());
+    let ctx = context(profile, options, store, known_hash.as_deref(), confidence);
 
     match exec::apply(&action, &file.path, &ctx) {
         Ok(Executed::Deferred(pending)) => {
@@ -305,7 +319,7 @@ fn defer(
     hasher: &mut LazyHash<'_>,
 ) -> FileOutcome {
     let (kind, reason, confidence) = match pending {
-        Pending::Review { reason } => (ReviewKind::Review, reason.clone(), None),
+        Pending::Review { reason, confidence } => (ReviewKind::Review, reason.clone(), *confidence),
         Pending::Quarantine { reason } => (ReviewKind::Quarantine, reason.clone(), None),
         Pending::Recycle { reason, confidence } => {
             (ReviewKind::Recycle, reason.clone(), Some(*confidence))
@@ -320,7 +334,9 @@ fn defer(
     // `review_placement = "quarantine"` physically moves pending items so they
     // can be browsed without the CLI. A dry run reports the decision but parks
     // nothing.
-    let ctx = context(profile, options, store, Some(&digest));
+    // Parking is performed by the run itself, so it is an automatic operation
+    // even though the decision it parks is still pending.
+    let ctx = context(profile, options, store, Some(&digest), confidence);
     let mut parked_at = None;
     if options.review_placement == ReviewPlacement::Quarantine && options.mode == Mode::Execute {
         let Some(root) = options.quarantine_dir.as_deref() else {
