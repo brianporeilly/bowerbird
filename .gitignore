@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Local config and state -- never commit a file that points at real directories.
+/bowerbird.toml
+/state.db
+/locks/
