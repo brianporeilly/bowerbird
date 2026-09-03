@@ -20,7 +20,7 @@ use bower_config::{Metadata, OnConflict, Profile, Rename};
 use bower_core::model::{
     FileFacts, FileId, FileRecord, Proposal, ProposalOutcome, RawProposal, ResolvedAction,
 };
-use bower_core::policy::{self, Decision, Occupancy, PlanInput};
+use bower_core::policy::{self, Decision, Occupancy, PlanInput, PriorRejections};
 use proptest::prelude::*;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -140,12 +140,21 @@ fn drive(
     outcome: &ProposalOutcome,
     found: Occupancy,
 ) -> ResolvedAction {
-    let mut decision =
-        policy::plan(&PlanInput { file: f, outcome, profile: p, observed: Some(f.facts) });
+    let mut decision = policy::plan(&PlanInput {
+        file: f,
+        outcome,
+        profile: p,
+        observed: Some(f.facts),
+        rejected: PriorRejections::default(),
+    });
     for _ in 0..300 {
         match decision {
             Decision::Final(action) => {
-                if let Some(dest) = action.dest() {
+                // `proposed_dest` is the wider net: it covers destinations a
+                // deferred decision merely remembers, which a human may later
+                // approve into a real move. Those must be as contained as the
+                // ones the executor acts on immediately.
+                if let Some(dest) = action.proposed_dest() {
                     assert_contained(dest.as_path());
                 }
                 return action;

@@ -34,15 +34,17 @@ That resolves differently in the two cases:
 The quarantine and recycle stores are excluded the same way, since they are
 equally this tool's own output.
 
-### Known gap
+### Known gap — closed in ADR-0003
 
 With `allow_dynamic_categories = true` *and* in-place organization, a category
-the model invented on an earlier run is not in `profile.categories` and so is
-not excluded. Closing this needs the journal to report which directories a
-profile has created, and is deferred until the journal ships. Until then such
-profiles should keep `include_subdirs = false`, the default, which avoids the
-situation entirely. The limitation is documented at
-`bower_core::scan::scan`.
+the model invented on an earlier run was not in `profile.categories` and so was
+not excluded.
+
+**Closed.** The journal now records the directory each committed operation wrote
+into, so `Store::managed_dirs` can report exactly which directories a profile
+has actually filed into, whether or not the config names them. The orchestrator
+merges that list into the scanner's excluded roots on every run. See ADR-0003
+§4.
 
 ## 2. `journal_path` is renamed `state_path`
 

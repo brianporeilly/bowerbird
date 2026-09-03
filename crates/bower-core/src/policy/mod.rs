@@ -48,6 +48,22 @@ pub struct PlanInput<'a> {
     /// The file's facts as observed *now*, immediately before deciding.
     /// `None` means it has vanished since the scan.
     pub observed: Option<FileFacts>,
+    /// What a human has already refused for this exact file.
+    pub rejected: PriorRejections<'a>,
+}
+
+/// Proposals a human has already refused for one file, looked up by the caller
+/// and handed in as data.
+///
+/// The engine consults the review queue's memory without ever acquiring a
+/// database connection, which is what lets remembered rejections work without
+/// costing the engine its purity.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PriorRejections<'a> {
+    /// Categories refused for this file's current content.
+    pub categories: &'a [String],
+    /// Whether a deletion suggestion for this content was refused.
+    pub deletion: bool,
 }
 
 /// The result of a pass through the engine.
@@ -156,6 +172,9 @@ fn plan_delete(input: &PlanInput<'_>, d: &DeleteProposal) -> Decision {
             input.outcome,
         );
     }
+    if input.rejected.deletion {
+        return Decision::Final(ResolvedAction::NoOp { reason: NoOpReason::PreviouslyRejected });
+    }
     Decision::Final(ResolvedAction::RecycleSuggested {
         reason: d.reason.clone(),
         confidence: d.confidence,
@@ -188,6 +207,13 @@ fn plan_categorize(input: &PlanInput<'_>, p: &RawProposal) -> Decision {
             );
         }
     };
+
+    // A question a human has already answered is not asked again until the file
+    // itself changes. Checked here, before any filesystem work, because the
+    // cheapest re-surfaced proposal is the one that is never built.
+    if input.rejected.categories.contains(&category) {
+        return Decision::Final(ResolvedAction::NoOp { reason: NoOpReason::PreviouslyRejected });
+    }
 
     // -- Stage 4: filename rendering ----------------------------------------
     let original_name = input.file.file_name();
@@ -263,6 +289,7 @@ pub fn resolve_collision(pending: &PendingMove, found: Occupancy) -> Decision {
                     "a different file already exists at {}",
                     pending.dest.as_path().display()
                 ),
+                proposed: Some(pending.dest.clone()),
             }),
             OnConflict::Suffix => next_suffix(pending),
         },
@@ -278,6 +305,10 @@ pub fn resolve_collision(pending: &PendingMove, found: Occupancy) -> Decision {
                     raw: Box::new(ProposalOutcome::Ok(Proposal::Categorize(
                         pending.proposal.clone(),
                     ))),
+                    // This proposal cleared every stage but the gate, so the
+                    // destination is settled and approval is a replay rather
+                    // than a fresh decision.
+                    proposed: Some(pending.dest.clone()),
                 });
             }
             let dest = pending.dest.clone();
@@ -298,6 +329,7 @@ fn next_suffix(pending: &PendingMove) -> Decision {
                 "gave up after {MAX_SUFFIX_ATTEMPTS} suffixed names were all taken at {}",
                 pending.dest.parent_dir().display()
             ),
+            proposed: Some(pending.base.clone()),
         });
     }
     match pending.base.with_suffix(attempt) {
@@ -309,6 +341,7 @@ fn next_suffix(pending: &PendingMove) -> Decision {
         })),
         Err(e) => Decision::Final(ResolvedAction::Quarantine {
             reason: format!("could not build a suffixed destination path: {e}"),
+            proposed: Some(pending.base.clone()),
         }),
     }
 }
@@ -324,9 +357,29 @@ fn match_declared(declared: &[String], proposed: &str) -> Option<String> {
         .cloned()
 }
 
+/// Resolves a proposed category against a profile, returning the spelling to
+/// actually use, or `None` if the profile does not permit it.
+///
+/// Public because approving a queued decision has to ask the same question a
+/// run does, against the config as it stands *now*: a category removed from the
+/// profile since the proposal was made must not be filed into just because a
+/// row remembers it.
+#[must_use]
+pub fn resolve_category(profile: &Profile, proposed: &str) -> Option<String> {
+    let normalized = sanitize::category(proposed)?;
+    match match_declared(&profile.categories, &normalized) {
+        Some(declared) => Some(declared),
+        None if profile.allow_dynamic_categories => Some(normalized),
+        None => None,
+    }
+}
+
+/// Routes a file to a human. Used by the stages that fail before a destination
+/// exists, so there is nothing to propose.
 fn review(reason: impl Into<String>, raw: &ProposalOutcome) -> Decision {
     Decision::Final(ResolvedAction::NeedsManualReview {
         reason: reason.into(),
         raw: Box::new(raw.clone()),
+        proposed: None,
     })
 }

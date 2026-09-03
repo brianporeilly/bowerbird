@@ -1,7 +1,18 @@
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing,
+        clippy::duration_suboptimal_units
+    )
+)]
 //! `bower` -- the Bowerbird command-line interface.
 
 mod cli;
 mod report;
+mod triage;
 
 use anyhow::{Context, Result, bail};
 use bower_config::{Config, Profile, Rename};
@@ -11,6 +22,7 @@ use bower_core::lock::{LockError, ProfileLock};
 use bower_core::policy;
 use bower_core::run::{RunOptions, run_profile};
 use bower_core::scan::ScanOptions;
+use bower_core::state::Store;
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -47,21 +59,23 @@ fn dispatch(cli: &Cli) -> Result<u8> {
             ConfigCommand::Check => cmd_config_check(cli.config.as_deref()),
         },
         Command::Review { command } => {
-            let what = match command {
-                ReviewCommand::List => "review list",
-                ReviewCommand::Show { .. } => "review show",
-                ReviewCommand::Approve { .. } => "review approve",
-                ReviewCommand::Reject { .. } => "review reject",
-            };
-            bail!("`{what}` needs the review queue, which lands with the SQLite state store")
+            let config = load(&resolve_config_path(cli.config.as_deref())?)?;
+            let store = open_store(&config)?;
+            match command {
+                ReviewCommand::List(args) => triage::list(&store, args),
+                ReviewCommand::Show { id } => triage::show(&store, *id),
+                ReviewCommand::Approve(args) => triage::approve(&store, &config, args),
+                ReviewCommand::Reject(args) => triage::reject(&store, &config, args),
+            }
         }
         Command::Recycle { command } => {
-            let what = match command {
-                RecycleCommand::List => "recycle list",
-                RecycleCommand::Restore { .. } => "recycle restore",
-                RecycleCommand::Purge => "recycle purge",
-            };
-            bail!("`{what}` needs the recycle store, which lands with the SQLite state store")
+            let config = load(&resolve_config_path(cli.config.as_deref())?)?;
+            let store = open_store(&config)?;
+            match command {
+                RecycleCommand::List => triage::recycle_list(&store),
+                RecycleCommand::Restore { id } => triage::recycle_restore(&store, &config, *id),
+                RecycleCommand::Purge(args) => triage::recycle_purge(&store, &config, args),
+            }
         }
     }
 }
@@ -103,8 +117,11 @@ fn cmd_run(explicit: Option<&Path>, args: &RunArgs) -> Result<u8> {
 
     let selected = select_profiles(&config, args)?;
     let dry_run = resolve_dry_run(&config, args);
+    let store = open_store(&config)?;
     let options = RunOptions {
         mode: Mode::from_dry_run(dry_run),
+        review_placement: config.general.review_placement,
+        quarantine_dir: config.general.quarantine_dir.clone(),
         scan: ScanOptions {
             // The quarantine and recycle stores are this tool's own output. If
             // either happens to sit inside a scanned directory it must never be
@@ -142,7 +159,7 @@ fn cmd_run(explicit: Option<&Path>, args: &RunArgs) -> Result<u8> {
             }
         };
 
-        let report = run_profile(profile, backend.as_ref(), &options)
+        let report = run_profile(profile, backend.as_ref(), &options, &store)
             .with_context(|| format!("profile `{}` failed", profile.name))?;
         report::print_run(&report, dry_run);
         needs_attention |= report.needs_attention();
@@ -231,6 +248,14 @@ fn check_templates(config: &Config) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Opens the state store, which holds the journal, the review queue,
+/// remembered rejections, and the recycle index.
+fn open_store(config: &Config) -> Result<Store> {
+    Store::open(&config.general.state_path).with_context(|| {
+        format!("could not open the state store at {}", config.general.state_path.display())
+    })
 }
 
 fn load(path: &Path) -> Result<Config> {

@@ -234,11 +234,179 @@ fn a_missing_config_says_where_it_looked() {
 }
 
 #[test]
-fn commands_that_need_the_state_store_say_so_rather_than_pretending() {
+fn an_empty_queue_and_recycle_store_say_so() {
     let f = Fixture::new();
-    for args in [vec!["review", "list"], vec!["recycle", "list"]] {
-        f.bower(0.0).args(&args).assert().code(ERROR).stderr(contains("state store"));
-    }
+    f.bower(0.0).args(["review", "list"]).assert().code(OK).stdout(contains("nothing is waiting"));
+    f.bower(0.0)
+        .args(["recycle", "list"])
+        .assert()
+        .code(OK)
+        .stdout(contains("recycle store is empty"));
+}
+
+/// Queues everything by setting a threshold nothing can clear.
+fn with_pending() -> (Fixture, std::path::PathBuf) {
+    let f = Fixture::new();
+    let config = f.config(1.0);
+    Command::cargo_bin("bower")
+        .unwrap()
+        .arg("--config")
+        .arg(&config)
+        .args(["run", "-p", "downloads", "--stub-llm", "--execute"])
+        .assert()
+        .code(ATTENTION);
+    (f, config)
+}
+
+fn bower_at(config: &Path) -> Command {
+    let mut cmd = Command::cargo_bin("bower").unwrap();
+    cmd.arg("--config").arg(config);
+    cmd
+}
+
+#[test]
+fn pending_items_are_listed_and_shown_in_detail() {
+    let (_f, config) = with_pending();
+
+    bower_at(&config)
+        .args(["review", "list"])
+        .assert()
+        .code(ATTENTION)
+        .stdout(contains("acme-invoice.pdf"))
+        .stdout(contains("review"));
+
+    bower_at(&config)
+        .args(["review", "show", "1"])
+        .assert()
+        .code(OK)
+        .stdout(contains("would file to"))
+        .stdout(contains("held because"))
+        .stdout(contains("hash"));
+}
+
+#[test]
+fn approving_an_item_files_it_where_the_run_would_have() {
+    let (f, config) = with_pending();
+    assert!(f.root().join("downloads/acme-invoice.pdf").exists());
+
+    bower_at(&config).args(["review", "approve", "1"]).assert().code(OK).stdout(contains("filed"));
+
+    assert!(f.root().join("downloads/Documents/acme-invoice.pdf").exists());
+    assert!(!f.root().join("downloads/acme-invoice.pdf").exists());
+    bower_at(&config).args(["review", "show", "1"]).assert().code(ERROR);
+}
+
+#[test]
+fn approving_a_dry_run_reports_without_writing() {
+    let (f, config) = with_pending();
+    bower_at(&config)
+        .args(["review", "approve", "1", "--dry-run"])
+        .assert()
+        .code(OK)
+        .stdout(contains("would be filed"));
+
+    assert!(f.root().join("downloads/acme-invoice.pdf").exists(), "nothing moved");
+    bower_at(&config).args(["review", "show", "1"]).assert().code(OK);
+}
+
+#[test]
+fn approving_a_file_that_changed_since_it_was_queued_is_refused() {
+    let (f, config) = with_pending();
+    // The file the proposal was about no longer exists in that form.
+    fs::write(f.root().join("downloads/acme-invoice.pdf"), "ENTIRELY DIFFERENT").unwrap();
+
+    bower_at(&config)
+        .args(["review", "approve", "1"])
+        .assert()
+        .code(ATTENTION)
+        .stderr(contains("has changed"));
+
+    assert!(
+        f.root().join("downloads/acme-invoice.pdf").exists(),
+        "the file must be left alone, not filed on a stale decision"
+    );
+    assert!(!f.root().join("downloads/Documents").exists());
+}
+
+#[test]
+fn approving_a_file_that_vanished_since_it_was_queued_is_refused() {
+    let (f, config) = with_pending();
+    fs::remove_file(f.root().join("downloads/acme-invoice.pdf")).unwrap();
+
+    bower_at(&config)
+        .args(["review", "approve", "1"])
+        .assert()
+        .code(ATTENTION)
+        .stderr(contains("no longer exists"));
+}
+
+#[test]
+fn rejecting_an_item_stops_it_being_proposed_again() {
+    let (f, config) = with_pending();
+
+    bower_at(&config)
+        .args(["review", "reject", "1", "--reason", "not an invoice"])
+        .assert()
+        .code(OK)
+        .stdout(contains("will not be proposed again"));
+
+    // A fresh run at a threshold everything clears must still leave it alone.
+    let permissive = f.config(0.0);
+    bower_at(&permissive)
+        .args(["run", "-p", "downloads", "--stub-llm", "--execute"])
+        .assert()
+        .code(OK);
+
+    assert!(
+        f.root().join("downloads/acme-invoice.pdf").exists(),
+        "a refused proposal must not be acted on by a later run"
+    );
+}
+
+#[test]
+fn bulk_approval_needs_confirmation_it_cannot_ask_for_without_a_terminal() {
+    let (_f, config) = with_pending();
+    bower_at(&config)
+        .args(["review", "approve", "--all"])
+        .assert()
+        .code(ERROR)
+        .stderr(contains("--yes"));
+}
+
+#[test]
+fn bulk_approval_files_everything_pending_when_confirmed() {
+    let (f, config) = with_pending();
+    bower_at(&config).args(["review", "approve", "--all", "--yes"]).assert().code(OK);
+
+    assert!(f.root().join("downloads/Documents/acme-invoice.pdf").exists());
+    assert!(f.root().join("downloads/Images/holiday.png").exists());
+    bower_at(&config).args(["review", "list"]).assert().code(OK).stdout(contains("nothing"));
+}
+
+#[test]
+fn the_queue_can_be_filtered_by_profile_and_type() {
+    let (_f, config) = with_pending();
+    bower_at(&config)
+        .args(["review", "list", "--profile", "downloads"])
+        .assert()
+        .code(ATTENTION)
+        .stdout(contains("acme-invoice.pdf"));
+
+    bower_at(&config)
+        .args(["review", "list", "--type", "delete"])
+        .assert()
+        .code(OK)
+        .stdout(contains("nothing is waiting"));
+}
+
+#[test]
+fn purge_refuses_a_duration_it_cannot_read() {
+    let (_f, config) = with_pending();
+    bower_at(&config)
+        .args(["recycle", "purge", "--older-than", "banana"])
+        .assert()
+        .code(ERROR)
+        .stderr(contains("duration"));
 }
 
 #[test]

@@ -12,8 +12,9 @@ that writes anything.
 The binary is `bower`.
 
 > **Status: pre-1.0, under active development.** The pipeline runs end to end
-> against the built-in offline classifier. No real LLM backend adapter has
-> shipped yet — see [Roadmap](#roadmap).
+> against the built-in offline classifier, with the journal, review queue and
+> recycle store in place. No real LLM backend adapter has shipped yet — see
+> [Roadmap](#roadmap).
 
 ## Why this design
 
@@ -52,8 +53,13 @@ Requires Rust 1.97 or newer.
 git clone https://github.com/brianporeilly/bowerbird
 cd bowerbird
 cargo build --release
-# or, for a static binary:
-cargo build --release --target x86_64-unknown-linux-musl
+```
+
+For a static binary you also need a musl C toolchain, since the bundled SQLite
+compiles C (`apt install musl-tools`, or `dnf install musl-gcc`):
+
+```sh
+just release-static
 ```
 
 ## Quick start
@@ -109,6 +115,15 @@ bower run                                        exactly one profile defined -> 
                                                  more than one -> error, list them
 
 bower config check                               validate config, list profiles
+
+bower review list [--profile N] [--type T]       what is waiting on a decision
+bower review show <id>                           one item in full
+bower review approve <id> | --all [--yes]        carry the decision out
+bower review reject <id> [--reason "..."]        refuse it, and remember
+
+bower recycle list                               what has been recycled
+bower recycle restore <id>                       put it back
+bower recycle purge --older-than 30d [--dry-run] permanently delete
 ```
 
 Flags: `--execute` writes (overriding `dry_run = true`), `--dry-run` forces a
@@ -149,12 +164,16 @@ review, none can skip a later one:
    is never an overwrite
 7. Confidence gate (deletion suggestions ignore this entirely — always manual)
 
+Anything the engine will not decide lands in the review queue, carrying the
+destination it would have used, so approving it later is a replay of a decision
+already made rather than a fresh trip to the model.
+
 ## Layout
 
 | Crate | Role |
 | ----- | ---- |
 | `bower-config` | TOML schema, defaulting, validation |
-| `bower-core` | Scanner, policy engine, executor, locking, orchestration |
+| `bower-core` | Scanner, policy engine, executor, state store, locking, orchestration |
 | `bower-llm` | Backend adapters; the trait itself lives in `bower-core` |
 | `bower-cli` | The `bower` binary |
 
@@ -175,18 +194,20 @@ Shipped:
 
 - Config, scanner, policy engine, executor, per-profile locking
 - Dry-run and execute paths, offline `--stub-llm` classifier
+- SQLite state store: append-only journal, review queue, remembered rejections,
+  recycle store — with `bower review` and `bower recycle`
 
 Next:
 
-- SQLite state store: append-only journal and review queue, unlocking
-  `bower review` and `bower recycle`
 - OpenAI-compatible backend adapter, then Anthropic-compatible
+- Filename template syntax, still provisional (ADR-0001, Open Questions)
 
 Deferred by design — see [ADR-0001](docs/ADR-0001-bowerbird-architecture.md):
 watcher daemon, notifications, TUI/GUI front-ends, media-library conventions.
 
-[ADR-0002](docs/ADR-0002-implementation-amendments.md) records where the
-implementation amends ADR-0001.
+[ADR-0002](docs/ADR-0002-implementation-amendments.md) and
+[ADR-0003](docs/ADR-0003-state-store-amendments.md) record where the
+implementation amends ADR-0001, and why.
 
 ## License
 

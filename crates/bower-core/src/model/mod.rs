@@ -155,6 +155,9 @@ pub enum NoOpReason {
     ConflictSkipped,
     /// A run with `dry_run = true` never executes.
     DryRun,
+    /// A human already refused this exact proposal, and the file has not
+    /// changed since.
+    PreviouslyRejected,
 }
 
 impl fmt::Display for NoOpReason {
@@ -165,6 +168,7 @@ impl fmt::Display for NoOpReason {
             Self::AlreadyInPlace => "file is already at its destination",
             Self::ConflictSkipped => "destination occupied and on_conflict = skip",
             Self::DryRun => "dry run",
+            Self::PreviouslyRejected => "this proposal was already rejected",
         };
         f.write_str(s)
     }
@@ -189,6 +193,9 @@ pub enum ResolvedAction {
     /// Park for a human decision: a conflict, not a deletion.
     Quarantine {
         reason: String,
+        /// Where the file would have gone. `None` when the conflict arose
+        /// before a destination was settled on.
+        proposed: Option<DestPath>,
     },
     /// Recorded for human review. Never executed automatically, at any
     /// confidence.
@@ -200,6 +207,10 @@ pub enum ResolvedAction {
     NeedsManualReview {
         reason: String,
         raw: Box<ProposalOutcome>,
+        /// Where the file would have gone, for the cases that got far enough to
+        /// know -- in practice, a proposal held back by the confidence gate.
+        /// `None` when the proposal failed earlier than path construction.
+        proposed: Option<DestPath>,
     },
     NoOp {
         reason: NoOpReason,
@@ -225,10 +236,30 @@ impl ResolvedAction {
         )
     }
 
+    /// The destination this action *will* write to. `None` for everything the
+    /// executor will not carry out on its own.
     #[must_use]
     pub fn dest(&self) -> Option<&DestPath> {
         match self {
             Self::Move { dest } | Self::MoveAndRename { dest } => Some(dest),
+            _ => None,
+        }
+    }
+
+    /// The destination this action *would* write to if a human approved it.
+    ///
+    /// Distinct from [`ResolvedAction::dest`]: a queued decision has to
+    /// remember where the file was headed, or approving it days later would
+    /// mean re-running the whole pipeline -- including another call to the
+    /// model -- just to recover an answer the engine already computed and
+    /// validated.
+    #[must_use]
+    pub fn proposed_dest(&self) -> Option<&DestPath> {
+        match self {
+            Self::Move { dest } | Self::MoveAndRename { dest } => Some(dest),
+            Self::Quarantine { proposed, .. } | Self::NeedsManualReview { proposed, .. } => {
+                proposed.as_ref()
+            }
             _ => None,
         }
     }

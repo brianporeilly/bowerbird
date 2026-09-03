@@ -26,6 +26,7 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
 use crate::model::{DestPath, NoOpReason, ResolvedAction};
+use crate::state::{Intent, JournalAction, JournalSink, Outcome, StateError};
 
 /// Whether the executor is allowed to write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,10 +72,33 @@ pub enum Executed {
     Deferred(Pending),
 }
 
+/// Everything an operation needs besides the action itself.
+#[derive(Clone, Copy)]
+pub struct ExecContext<'a> {
+    pub profile: &'a str,
+    pub mode: Mode,
+    /// Content hash, when the caller already computed one. Recorded in the
+    /// journal so an entry identifies the bytes, not just a path.
+    pub file_hash: Option<&'a str>,
+    pub journal: &'a dyn JournalSink,
+}
+
+impl std::fmt::Debug for ExecContext<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecContext")
+            .field("profile", &self.profile)
+            .field("mode", &self.mode)
+            .field("file_hash", &self.file_hash)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExecError {
     #[error("something already exists at {dest}; refusing to overwrite")]
     DestinationOccupied { dest: PathBuf },
+    #[error("could not record the operation in the journal; refusing to proceed unrecorded")]
+    Journal(#[from] StateError),
     #[error("source file {path} vanished before it could be moved")]
     SourceVanished { path: PathBuf },
     #[error("could not {op} {path}")]
@@ -87,12 +111,18 @@ pub enum ExecError {
 }
 
 /// Carries out one resolved action.
-pub fn apply(action: &ResolvedAction, source: &Path, mode: Mode) -> Result<Executed, ExecError> {
+pub fn apply(
+    action: &ResolvedAction,
+    source: &Path,
+    ctx: &ExecContext<'_>,
+) -> Result<Executed, ExecError> {
     match action {
-        ResolvedAction::Move { dest } => run_move(source, dest, false, mode),
-        ResolvedAction::MoveAndRename { dest } => run_move(source, dest, true, mode),
+        ResolvedAction::Move { dest } => relocate(source, dest, JournalAction::Move, ctx),
+        ResolvedAction::MoveAndRename { dest } => {
+            relocate(source, dest, JournalAction::MoveAndRename, ctx)
+        }
         ResolvedAction::NoOp { reason } => Ok(Executed::Nothing { reason: reason.clone() }),
-        ResolvedAction::Quarantine { reason } => {
+        ResolvedAction::Quarantine { reason, .. } => {
             Ok(Executed::Deferred(Pending::Quarantine { reason: reason.clone() }))
         }
         ResolvedAction::RecycleSuggested { reason, confidence } => {
@@ -107,16 +137,26 @@ pub fn apply(action: &ResolvedAction, source: &Path, mode: Mode) -> Result<Execu
     }
 }
 
-fn run_move(
+/// Moves a file to a proven-contained destination, journalling before and
+/// after.
+///
+/// The intent is recorded *before* the filesystem is touched, so a crash
+/// part-way leaves an intent with no result -- the only way an interrupted move
+/// can be told apart from one that never started. A journal that will not
+/// accept the intent aborts the operation rather than proceeding unrecorded.
+pub fn relocate(
     source: &Path,
     dest: &DestPath,
-    renamed: bool,
-    mode: Mode,
+    what: JournalAction,
+    ctx: &ExecContext<'_>,
 ) -> Result<Executed, ExecError> {
+    let renamed = what == JournalAction::MoveAndRename
+        || source.file_name().is_none_or(|n| n != dest.filename());
+
     if !source.exists() {
         return Err(ExecError::SourceVanished { path: source.to_path_buf() });
     }
-    if mode == Mode::DryRun {
+    if ctx.mode == Mode::DryRun {
         return Ok(Executed::WouldMove {
             from: source.to_path_buf(),
             to: dest.as_path().to_path_buf(),
@@ -125,18 +165,41 @@ fn run_move(
     }
 
     let parent = dest.parent_dir();
-    fs::create_dir_all(&parent).map_err(|source| ExecError::Io {
-        op: "create directory",
-        path: parent,
+    let intent = Intent {
+        profile: ctx.profile,
+        action: what,
         source,
-    })?;
+        dest: Some(dest.as_path()),
+        dest_dir: Some(&parent),
+        file_hash: ctx.file_hash,
+    };
+    let op = ctx.journal.record_intent(&intent)?;
 
-    move_no_clobber(source, dest.as_path())?;
-    Ok(Executed::Moved { from: source.to_path_buf(), to: dest.as_path().to_path_buf(), renamed })
+    let outcome = fs::create_dir_all(&parent)
+        .map_err(|e| ExecError::Io { op: "create directory", path: parent.clone(), source: e })
+        .and_then(|()| move_no_clobber(source, dest.as_path()));
+
+    match outcome {
+        Ok(()) => {
+            ctx.journal.record_result(&op, &intent, &Outcome::Committed)?;
+            Ok(Executed::Moved {
+                from: source.to_path_buf(),
+                to: dest.as_path().to_path_buf(),
+                renamed,
+            })
+        }
+        Err(e) => {
+            // Best effort: the operation already failed, and losing the record
+            // of that must not mask the original error.
+            let _ =
+                ctx.journal.record_result(&op, &intent, &Outcome::Failed { detail: e.to_string() });
+            Err(e)
+        }
+    }
 }
 
 /// Moves `src` to `dest`, failing rather than replacing anything already there.
-fn move_no_clobber(src: &Path, dest: &Path) -> Result<(), ExecError> {
+pub(crate) fn move_no_clobber(src: &Path, dest: &Path) -> Result<(), ExecError> {
     match fs::hard_link(src, dest) {
         Ok(()) => fs::remove_file(src).map_err(|source| ExecError::Io {
             op: "remove source after linking",
@@ -197,7 +260,14 @@ pub(crate) fn copy_no_clobber(src: &Path, dest: &Path) -> Result<(), ExecError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{NoJournal, Store};
     use std::io::Write;
+
+    /// A context that records nothing, for tests of the move mechanics.
+    fn ctx(mode: Mode) -> ExecContext<'static> {
+        const DISCARD: NoJournal = NoJournal;
+        ExecContext { profile: "test", mode, file_hash: None, journal: &DISCARD }
+    }
 
     fn write(path: &Path, body: &str) {
         if let Some(p) = path.parent() {
@@ -213,7 +283,8 @@ mod tests {
         write(&src, "body");
 
         let dest = DestPath::under(dir.path(), "Invoices", "invoice.pdf").unwrap();
-        let out = apply(&ResolvedAction::Move { dest: dest.clone() }, &src, Mode::Execute).unwrap();
+        let out =
+            apply(&ResolvedAction::Move { dest: dest.clone() }, &src, &ctx(Mode::Execute)).unwrap();
 
         assert!(matches!(out, Executed::Moved { renamed: false, .. }));
         assert!(!src.exists(), "source should be gone");
@@ -229,8 +300,8 @@ mod tests {
         let dest = DestPath::under(dir.path(), "Invoices", "invoice.pdf").unwrap();
         write(dest.as_path(), "existing");
 
-        let err =
-            apply(&ResolvedAction::Move { dest: dest.clone() }, &src, Mode::Execute).unwrap_err();
+        let err = apply(&ResolvedAction::Move { dest: dest.clone() }, &src, &ctx(Mode::Execute))
+            .unwrap_err();
 
         assert!(matches!(err, ExecError::DestinationOccupied { .. }));
         assert_eq!(fs::read_to_string(dest.as_path()).unwrap(), "existing", "must not clobber");
@@ -271,7 +342,8 @@ mod tests {
         write(&src, "body");
 
         let dest = DestPath::under(dir.path(), "Invoices", "invoice.pdf").unwrap();
-        let out = apply(&ResolvedAction::Move { dest: dest.clone() }, &src, Mode::DryRun).unwrap();
+        let out =
+            apply(&ResolvedAction::Move { dest: dest.clone() }, &src, &ctx(Mode::DryRun)).unwrap();
 
         assert!(matches!(out, Executed::WouldMove { .. }));
         assert!(src.exists(), "source must be untouched");
@@ -284,7 +356,7 @@ mod tests {
         let src = dir.path().join("gone.pdf");
         let dest = DestPath::under(dir.path(), "Invoices", "gone.pdf").unwrap();
 
-        let err = apply(&ResolvedAction::Move { dest }, &src, Mode::Execute).unwrap_err();
+        let err = apply(&ResolvedAction::Move { dest }, &src, &ctx(Mode::Execute)).unwrap_err();
         assert!(matches!(err, ExecError::SourceVanished { .. }));
     }
 
@@ -298,9 +370,80 @@ mod tests {
             reason: "looks like a duplicate installer".into(),
             confidence: 0.99,
         };
-        let out = apply(&action, &src, Mode::Execute).unwrap();
+        let out = apply(&action, &src, &ctx(Mode::Execute)).unwrap();
 
         assert!(matches!(out, Executed::Deferred(Pending::Recycle { .. })));
         assert!(src.exists(), "a recycle suggestion must never move a file on its own");
+    }
+
+    #[test]
+    fn a_move_is_journalled_before_and_after() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let src = dir.path().join("invoice.pdf");
+        write(&src, "body");
+        let dest = DestPath::under(dir.path(), "Invoices", "invoice.pdf").unwrap();
+
+        let context = ExecContext {
+            profile: "downloads",
+            mode: Mode::Execute,
+            file_hash: Some("deadbeef"),
+            journal: &store,
+        };
+        apply(&ResolvedAction::Move { dest: dest.clone() }, &src, &context).unwrap();
+
+        assert!(
+            store.unfinished_operations().unwrap().is_empty(),
+            "a completed move leaves no dangling intent"
+        );
+        assert_eq!(
+            store.managed_dirs("downloads").unwrap(),
+            [dest.parent_dir()],
+            "the journal records which directory was written into"
+        );
+    }
+
+    #[test]
+    fn a_refused_move_is_journalled_as_failed_and_claims_no_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let src = dir.path().join("invoice.pdf");
+        write(&src, "new");
+        let dest = DestPath::under(dir.path(), "Invoices", "invoice.pdf").unwrap();
+        write(dest.as_path(), "existing");
+
+        let context = ExecContext {
+            profile: "downloads",
+            mode: Mode::Execute,
+            file_hash: None,
+            journal: &store,
+        };
+        apply(&ResolvedAction::Move { dest }, &src, &context).unwrap_err();
+
+        assert!(store.unfinished_operations().unwrap().is_empty(), "the failure was recorded");
+        assert!(
+            store.managed_dirs("downloads").unwrap().is_empty(),
+            "a directory nothing landed in is not managed"
+        );
+    }
+
+    #[test]
+    fn a_dry_run_records_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let src = dir.path().join("invoice.pdf");
+        write(&src, "body");
+        let dest = DestPath::under(dir.path(), "Invoices", "invoice.pdf").unwrap();
+
+        let context = ExecContext {
+            profile: "downloads",
+            mode: Mode::DryRun,
+            file_hash: None,
+            journal: &store,
+        };
+        apply(&ResolvedAction::Move { dest }, &src, &context).unwrap();
+
+        assert!(store.unfinished_operations().unwrap().is_empty());
+        assert!(store.managed_dirs("downloads").unwrap().is_empty(), "nothing happened to record");
     }
 }

@@ -77,12 +77,14 @@ pub struct ScanOptions {
 ///   destination root would skip the entire scan, so instead the *category
 ///   subdirectories* under it are skipped.
 ///
-/// One gap remains: with `allow_dynamic_categories = true` and in-place
-/// organization, a category the model invented on an earlier run is not in
-/// `profile.categories` and so is not skipped. Closing that needs the journal
-/// to report which directories this profile has created, which arrives with the
-/// journal itself. Until then, in-place profiles with dynamic categories should
-/// keep `include_subdirs = false` (the default), which sidesteps it entirely.
+/// Neither rule can cover a category the model invented on an earlier run,
+/// since the config never names it. That is what
+/// [`crate::state::Store::managed_dirs`] is for: the journal records the
+/// directory every committed operation wrote into, and
+/// [`crate::run::run_profile`] merges that list into
+/// [`ScanOptions::extra_excluded_roots`] before calling this function. A
+/// caller that scans without consulting the journal will re-ingest
+/// dynamically created categories.
 pub fn scan(profile: &Profile, options: &ScanOptions) -> Result<ScanReport, ScanError> {
     let excludes = build_globset(profile)?;
     let managed = managed_roots(profile, options);

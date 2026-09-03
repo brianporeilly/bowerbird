@@ -73,15 +73,80 @@ pub(crate) enum ConfigCommand {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ReviewCommand {
-    List,
-    Show { id: String },
-    Approve { id: String },
-    Reject { id: String },
+    /// Show everything waiting on a decision.
+    List(ReviewListArgs),
+    /// Show one item in full, including the model's reasoning.
+    Show { id: i64 },
+    /// Carry out a queued decision.
+    Approve(ApproveArgs),
+    /// Refuse a queued decision, and remember the refusal.
+    Reject(RejectArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ReviewListArgs {
+    #[arg(long, short = 'p')]
+    pub(crate) profile: Option<String>,
+    /// Restrict to one kind of pending decision.
+    #[arg(long = "type", value_enum)]
+    pub(crate) kind: Option<ItemType>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum ItemType {
+    /// The engine would not decide on its own.
+    Review,
+    /// A deletion suggestion.
+    Delete,
+    /// Parked because the destination was occupied.
+    Quarantine,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ApproveArgs {
+    /// The item to approve. Omit with --all.
+    pub(crate) id: Option<i64>,
+    /// Approve every pending item, optionally narrowed to one profile.
+    #[arg(long, conflicts_with = "id")]
+    pub(crate) all: bool,
+    #[arg(long, short = 'p')]
+    pub(crate) profile: Option<String>,
+    /// Skip the confirmation prompt. Required for --all when not on a terminal.
+    #[arg(long, short = 'y')]
+    pub(crate) yes: bool,
+    /// Report what would happen without writing anything.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct RejectArgs {
+    pub(crate) id: i64,
+    /// Recorded alongside the refusal, for your own future reference.
+    #[arg(long)]
+    pub(crate) reason: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RecycleCommand {
+    /// Show everything in the recycle store.
     List,
-    Restore { id: String },
-    Purge,
+    /// Move a recycled file back where it came from.
+    Restore { id: i64 },
+    /// Permanently delete recycled files. The only command that destroys
+    /// anything.
+    Purge(PurgeArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PurgeArgs {
+    /// Only purge items recycled longer ago than this, e.g. 30d, 2w, 12h.
+    #[arg(long = "older-than", value_name = "DURATION")]
+    pub(crate) older_than: String,
+    /// List what would be destroyed without destroying it.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+    /// Skip the confirmation prompt.
+    #[arg(long, short = 'y')]
+    pub(crate) yes: bool,
 }
