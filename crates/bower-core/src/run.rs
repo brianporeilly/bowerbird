@@ -110,6 +110,26 @@ pub struct RunOptions {
     /// Whether pending items stay put or move to a holding folder.
     pub review_placement: ReviewPlacement,
     pub quarantine_dir: Option<PathBuf>,
+    /// Seconds east of UTC, for rendering the `{date}` filename token in the
+    /// user's own day. Resolved once by the caller -- see
+    /// [`crate::local_utc_offset_secs`] -- because the policy engine must not
+    /// read the environment. `0` is UTC.
+    pub utc_offset_secs: i64,
+}
+
+impl RunOptions {
+    /// `mode` and `scan`, with everything else defaulted: reviews stay in
+    /// place, and dates render in UTC.
+    #[must_use]
+    pub fn new(mode: Mode, scan: ScanOptions) -> Self {
+        Self {
+            mode,
+            scan,
+            review_placement: ReviewPlacement::InPlace,
+            quarantine_dir: None,
+            utc_offset_secs: 0,
+        }
+    }
 }
 
 /// Scans, classifies, resolves, executes, and records one profile.
@@ -249,8 +269,14 @@ fn decide_and_execute(
     let outcome = response.outcome_for(&file.id);
     let observed = observe(&file.path);
 
-    let mut decision =
-        policy::plan(&PlanInput { file, outcome: &outcome, profile, observed, rejected: prior });
+    let mut decision = policy::plan(&PlanInput {
+        file,
+        outcome: &outcome,
+        profile,
+        observed,
+        rejected: prior,
+        utc_offset_secs: options.utc_offset_secs,
+    });
 
     // The policy engine cannot look at the disk, so it hands the collision
     // check back here. `on_conflict = "suffix"` walks candidate names, so this

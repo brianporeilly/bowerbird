@@ -50,9 +50,27 @@ builder had deliberately chosen not to disclose.
 `template_tokens` no longer names them, so the model is not asked; `render`
 takes the date as an argument and ignores any `date` the model supplied anyway.
 
-`FileFacts::modified_date` produces `YYYY-MM-DD` in UTC. The civil-date
-arithmetic moved out of the stub backend into `bower-core`, which is where it
-belonged once the engine became the thing that needs it.
+`FileFacts::modified_date` produces `YYYY-MM-DD`. The civil-date arithmetic
+moved out of the stub backend into `bower-core`, which is where it belonged once
+the engine became the thing that needs it.
+
+It renders in **local time**, and takes the UTC offset as an argument rather
+than reading it. The first live run against a real model exposed why this
+matters: a file saved at 17:30 in AKDT is 01:30 the *next day* in UTC, so a UTC
+date put tomorrow in the filename for roughly a third of every working day.
+
+The offset is a parameter because reading a timezone consults the environment,
+and the policy engine is not allowed ambient input. `run::RunOptions` carries it,
+`policy::PlanInput` receives it, and `bower_core::local_utc_offset_secs` — called
+once, at the CLI boundary — is the only place it is read. This is the same shape
+as `Occupancy` and `PriorRejections`: the caller looks it up, the engine is
+handed data.
+
+`time::UtcOffset::current_local_offset` returns an error rather than guessing in
+a process with other threads running, since reading the timezone races a
+concurrent `setenv`. That case falls back to UTC, which is a wrong-by-a-day
+filename instead of a data race, and is exactly the behaviour that existed
+before local time was supported at all.
 
 A date is a fact the scanner already holds. Asking a model to guess it, when
 the answer is sitting in a `stat` result, is not a use of a model.
@@ -82,8 +100,11 @@ template asking for anything else gets a `MissingToken` and the file goes to
 review — which is exactly what a real model declining a token does, and worth
 exercising rather than papering over.
 
-`{date}` now always means the file's mtime, never a date read out of the
-document. For an invoice, the document's own date is often what a person wants.
+`{date}` now always means the file's mtime in the machine's local timezone,
+never a date read out of the document. Two machines in different timezones can
+therefore render different names for the same file. That is the correct trade:
+this is a personal-file tool, the filename is read by the person whose day it
+was, and duplicate detection is by content hash rather than by name. For an invoice, the document's own date is often what a person wants.
 That is a real limitation, and the honest place to solve it is a distinct
 model-proposed token, which nothing yet needs. Recorded as open in the
 [ROADMAP](ROADMAP.md).

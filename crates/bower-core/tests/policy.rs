@@ -103,6 +103,7 @@ fn resolve_with(
         profile: p,
         observed: Some(f.facts),
         rejected: PriorRejections::default(),
+        utc_offset_secs: 0,
     });
     for _ in 0..200 {
         match decision {
@@ -168,6 +169,7 @@ fn a_file_that_changed_since_the_scan_is_left_alone() {
         profile: &profile(),
         observed: Some(changed),
         rejected: PriorRejections::default(),
+        utc_offset_secs: 0,
     });
     assert_eq!(decision.action(), Some(&ResolvedAction::NoOp { reason: NoOpReason::Stale }));
 }
@@ -182,6 +184,7 @@ fn a_file_that_vanished_since_the_scan_is_left_alone() {
         profile: &profile(),
         observed: None,
         rejected: PriorRejections::default(),
+        utc_offset_secs: 0,
     });
     assert_eq!(decision.action(), Some(&ResolvedAction::NoOp { reason: NoOpReason::Stale }));
 }
@@ -538,6 +541,7 @@ fn resolve_rejecting(
         profile: p,
         observed: Some(f.facts),
         rejected,
+        utc_offset_secs: 0,
     });
     for _ in 0..200 {
         match decision {
@@ -673,4 +677,82 @@ fn a_quarantined_conflict_remembers_the_destination_it_could_not_take() {
         }
         other => panic!("expected quarantine, got {other:?}"),
     }
+}
+
+// --- the `{date}` token's timezone ------------------------------------------
+
+/// The bug this pins: a file saved at 17:30 in AKDT (UTC-8) is 01:30 the *next*
+/// day in UTC, so rendering in UTC put tomorrow's date in the filename for
+/// roughly a third of the working day.
+#[test]
+fn the_date_token_renders_in_the_callers_day_not_greenwichs() {
+    // 2024-10-01 01:30 UTC, which is 2024-09-30 17:30 in AKDT.
+    let evening_in_alaska =
+        SystemTime::UNIX_EPOCH + Duration::from_secs(19_997 * 86_400 + 3_600 + 30 * 60);
+
+    let facts = FileFacts { size: 42, mtime: evening_in_alaska };
+    assert_eq!(facts.modified_date(0), "2024-10-01", "UTC sees the next day");
+    assert_eq!(facts.modified_date(-8 * 3_600), "2024-09-30", "the user saved it in September");
+}
+
+#[test]
+fn an_offset_east_of_utc_can_advance_the_day_too() {
+    let late_utc = SystemTime::UNIX_EPOCH + Duration::from_secs(19_797 * 86_400 + 23 * 3_600);
+    let facts = FileFacts { size: 42, mtime: late_utc };
+
+    assert_eq!(facts.modified_date(0), "2024-03-15");
+    assert_eq!(facts.modified_date(9 * 3_600), "2024-03-16", "Tokyo is already tomorrow");
+}
+
+/// An offset that pushes a near-epoch file before 1970 must round *down* to the
+/// earlier day. Integer division truncates toward zero and would give 1970-01-01.
+#[test]
+fn a_pre_epoch_instant_rounds_down_rather_than_toward_zero() {
+    let facts = FileFacts { size: 0, mtime: SystemTime::UNIX_EPOCH };
+    assert_eq!(facts.modified_date(0), "1970-01-01");
+    assert_eq!(facts.modified_date(-8 * 3_600), "1969-12-31");
+}
+
+/// The offset is data the caller supplies. If the engine ever read the
+/// timezone itself this would be impossible to write.
+#[test]
+fn the_engine_takes_the_offset_as_input_rather_than_reading_a_clock() {
+    let mut p = profile();
+    p.rename = Rename::Enabled { template: "{date}-{vendor}{ext}".to_owned() };
+    let mut f = file("scan001.pdf");
+    f.facts.mtime = SystemTime::UNIX_EPOCH + MARCH_2024;
+
+    let outcome = ProposalOutcome::Ok(Proposal::Categorize(RawProposal {
+        file_id: f.id.clone(),
+        category: "Documents".to_owned(),
+        is_new_category: false,
+        name_tokens: [("vendor".to_owned(), "Acme".to_owned())].into_iter().collect(),
+        confidence: 0.99,
+        reasoning: String::new(),
+    }));
+
+    let named = |offset: i64| {
+        let mut decision = policy::plan(&PlanInput {
+            file: &f,
+            outcome: &outcome,
+            profile: &p,
+            observed: Some(f.facts),
+            rejected: PriorRejections::default(),
+            utc_offset_secs: offset,
+        });
+        loop {
+            match decision {
+                Decision::Final(ResolvedAction::MoveAndRename { dest }) => {
+                    return dest.filename().to_owned();
+                }
+                Decision::Final(other) => panic!("expected a rename, got {other:?}"),
+                Decision::CheckCollision(pending) => {
+                    decision = policy::resolve_collision(&pending, Occupancy::Vacant);
+                }
+            }
+        }
+    };
+
+    assert_eq!(named(0), "2024-03-15-Acme.pdf");
+    assert_eq!(named(-8 * 3_600), "2024-03-14-Acme.pdf");
 }

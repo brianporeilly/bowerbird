@@ -55,20 +55,30 @@ pub struct FileFacts {
 }
 
 impl FileFacts {
-    /// The file's mtime as `YYYY-MM-DD`, in UTC.
+    /// The file's mtime as `YYYY-MM-DD`, shifted by `utc_offset_secs`.
     ///
     /// This backs the `{date}` filename token. It lives here, next to the fact
     /// it reports, because the engine fills that token itself rather than
     /// asking the model for it -- see `policy::template`.
     ///
-    /// A clock before the epoch yields `1970-01-01` rather than an error. A
+    /// The offset is a *parameter* rather than something read from the
+    /// environment, because this is called from the policy engine and reading
+    /// the system timezone is exactly the kind of ambient input the engine is
+    /// not allowed to have. The caller resolves it once per run and hands it
+    /// in, the same way it hands in [`crate::policy::Occupancy`]. See
+    /// [`crate::local_utc_offset_secs`].
+    ///
+    /// A clock before the epoch yields a pre-1970 date rather than an error. A
     /// filename is not the place to surface a broken timestamp, and the
     /// alternative is sending the file to manual review over something no
     /// human reviewing it could act on.
     #[must_use]
-    pub fn modified_date(&self) -> String {
+    pub fn modified_date(&self, utc_offset_secs: i64) -> String {
         let secs = self.mtime.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let (y, m, d) = civil_from_days(i64::try_from(secs / 86_400).unwrap_or(0));
+        let shifted = i64::try_from(secs).unwrap_or(0).saturating_add(utc_offset_secs);
+        // div_euclid, not `/`: a pre-epoch instant must round *down* to the
+        // earlier day, and integer division truncates toward zero.
+        let (y, m, d) = civil_from_days(shifted.div_euclid(86_400));
         format!("{y:04}-{m:02}-{d:02}")
     }
 }

@@ -152,7 +152,8 @@ on_conflict = "quarantine"
 [profiles.rename]
 enabled = true
 # `{ext}` and `{date}` are filled by Bowerbird from the file itself -- the
-# extension including the dot, and the mtime as YYYY-MM-DD. The model is never
+# extension including the dot, and the mtime as YYYY-MM-DD in *local* time, so
+# a file saved in the evening carries the date you remember saving it. The model is never
 # asked for them and cannot override them: it is never told the file's date, so
 # a date it supplied would be one it made up.
 #

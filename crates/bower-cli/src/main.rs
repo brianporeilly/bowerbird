@@ -272,6 +272,9 @@ fn cmd_run(explicit: Option<&Path>, args: &RunArgs) -> Result<u8> {
                 .cloned()
                 .collect(),
         },
+        // Resolved once, here at the edge, and handed to the engine as data. The
+        // policy engine reads no environment of its own.
+        utc_offset_secs: bower_core::local_utc_offset_secs(),
     };
 
     let mut needs_attention = false;

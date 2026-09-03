@@ -102,6 +102,7 @@ fn run_options() -> RunOptions {
         scan: ScanOptions::default(),
         review_placement: ReviewPlacement::InPlace,
         quarantine_dir: None,
+        utc_offset_secs: 0,
     }
 }
 

@@ -141,6 +141,7 @@ fn run(fixture: &Fixture, profile: &Profile, server: &MockServer) -> RunReport {
         scan: ScanOptions::default(),
         review_placement: ReviewPlacement::InPlace,
         quarantine_dir: None,
+        utc_offset_secs: 0,
     };
     let _ = fixture;
     run_profile(profile, &adapter, &options, &store).unwrap()
