@@ -8,6 +8,7 @@
         clippy::case_sensitive_file_extension_comparisons
     )
 )]
+pub mod context;
 pub mod exec;
 pub mod hash;
 pub mod llm;

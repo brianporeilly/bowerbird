@@ -63,6 +63,44 @@ pub struct Backend {
     pub model: String,
     pub timeout: Duration,
     pub max_retries: u32,
+    /// How this endpoint is asked to return JSON.
+    pub structured_output: StructuredOutput,
+}
+
+/// How a backend is asked to produce parseable JSON.
+///
+/// ADR-0001 left this open, noting that tool-calling and JSON modes are
+/// preferable where available but absent on many small local models. It is a
+/// per-backend capability rather than a global setting because a single install
+/// routinely talks to both a cloud endpoint and a llama.cpp server.
+///
+/// The default is deliberately the weakest option. An endpoint that does not
+/// recognise `response_format` typically rejects the whole request, so a
+/// stronger default would mean Bowerbird fails on first contact with exactly
+/// the self-hosted servers ADR-0001 §9 names as the primary target. Opting up
+/// is a one-line change once you know what your server supports; opting down
+/// after a confusing 400 is not.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuredOutput {
+    /// Ask for JSON in the prompt and parse what comes back. Sends no
+    /// `response_format`, so it works against any OpenAI-shaped endpoint.
+    #[default]
+    Prompt,
+    /// `response_format: {"type": "json_object"}`. Widely supported: recent
+    /// llama.cpp, Ollama, vLLM, and the OpenAI API itself.
+    JsonObject,
+    /// `response_format: {"type": "json_schema", ...}` with a strict schema.
+    /// The most reliable option where it is supported.
+    JsonSchema,
+}
+
+impl StructuredOutput {
+    /// Whether this mode sends a `response_format` field at all.
+    #[must_use]
+    pub fn sends_response_format(self) -> bool {
+        self != Self::Prompt
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -302,6 +340,7 @@ fn validate(raw: raw::RawConfig) -> Result<Config, ConfigError> {
             model: b.model,
             timeout: Duration::from_secs(b.timeout_secs),
             max_retries: b.max_retries,
+            structured_output: b.structured_output,
         });
     }
 

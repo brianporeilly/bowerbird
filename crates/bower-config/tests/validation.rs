@@ -9,7 +9,7 @@
 //! loudly and completely, so these lean on two properties: unknown keys are
 //! errors, and every problem is reported in one pass.
 
-use bower_config::{Config, ConfigError, OnConflict, Rename, ReviewPlacement};
+use bower_config::{Config, ConfigError, OnConflict, Rename, ReviewPlacement, StructuredOutput};
 
 const MINIMAL: &str = r#"
 config_version = 1
@@ -218,6 +218,42 @@ fn api_keys_come_from_the_environment_only() {
     let backend = c.backend("local").unwrap();
     // An empty api_key_env means "unauthenticated", not "empty key".
     assert_eq!(backend.api_key_env, None);
+}
+
+#[test]
+fn structured_output_defaults_to_the_mode_that_works_anywhere() {
+    let backend = parse(MINIMAL).unwrap().backend("local").unwrap().clone();
+    assert_eq!(
+        backend.structured_output,
+        StructuredOutput::Prompt,
+        "an unknown endpoint must not be sent a response_format it may reject"
+    );
+    assert!(!backend.structured_output.sends_response_format());
+}
+
+#[test]
+fn structured_output_can_be_opted_up_per_backend() {
+    for (value, expected) in [
+        ("json_object", StructuredOutput::JsonObject),
+        ("json_schema", StructuredOutput::JsonSchema),
+        ("prompt", StructuredOutput::Prompt),
+    ] {
+        let text = MINIMAL.replace(
+            "model = \"llama-3.1-8b-instruct\"",
+            &format!("model = \"llama-3.1-8b-instruct\"\nstructured_output = \"{value}\""),
+        );
+        let backend = parse(&text).unwrap().backend("local").unwrap().clone();
+        assert_eq!(backend.structured_output, expected, "for {value}");
+    }
+}
+
+#[test]
+fn an_unknown_structured_output_mode_is_rejected() {
+    let text = MINIMAL.replace(
+        "model = \"llama-3.1-8b-instruct\"",
+        "model = \"llama-3.1-8b-instruct\"\nstructured_output = \"telepathy\"",
+    );
+    assert!(matches!(parse(&text), Err(ConfigError::Parse { .. })));
 }
 
 #[test]

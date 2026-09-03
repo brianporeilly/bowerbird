@@ -17,8 +17,10 @@
 //! The trait itself lives in `bower_core::llm`, so that the core owns the shape
 //! of the conversation and a backend remains a detail plugged into it.
 
+pub mod openai;
 pub mod stub;
 
+pub use openai::OpenAiBackend;
 pub use stub::StubBackend;
 
 use bower_config::{Backend, Provider};
@@ -36,9 +38,7 @@ pub enum BuildError {
 /// Builds the adapter a profile's backend config asks for.
 pub fn build(backend: &Backend) -> Result<Box<dyn LlmBackend>, BuildError> {
     match backend.provider {
-        Provider::OpenaiCompatible => {
-            Err(BuildError::NotImplemented { provider: "OpenAI-compatible" })
-        }
+        Provider::OpenaiCompatible => Ok(Box::new(OpenAiBackend::new(backend))),
         Provider::AnthropicCompatible => {
             Err(BuildError::NotImplemented { provider: "Anthropic-compatible" })
         }

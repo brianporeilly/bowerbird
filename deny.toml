@@ -26,6 +26,12 @@ allow = [
     "Zlib",
     "MPL-2.0",
     "CC0-1.0",
+    # webpki-roots only. This is the Mozilla CA root set, and CDLA-Permissive-2.0
+    # is a permissive *data* licence: no copyleft, no attribution requirement
+    # beyond keeping the disclaimer. Bundling the roots rather than reading the
+    # host trust store is what lets the static binary do TLS on a distroless
+    # image that has no CA store at all, which ADR-0001 §1 asks for.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 

@@ -79,6 +79,42 @@ files before pointing a real model at them.
 The config ships with `dry_run = true`. Nothing is written until you pass
 `--execute`.
 
+To use a real model instead, point a backend at it and drop `--stub-llm`:
+
+```toml
+[[llm_backends]]
+name = "local-llama"
+provider = "openai_compatible"
+endpoint = "http://localhost:8080/v1"
+model = "llama-3.1-8b-instruct"
+api_key_env = ""              # names an env var; the key is never in the file
+structured_output = "prompt"
+```
+
+## Asking a model for JSON
+
+`structured_output` controls how a backend is made to return something
+parseable. It is per backend, because one install often talks to both a cloud
+API and a local server.
+
+| Mode | Sends | Works with |
+| ---- | ----- | ---------- |
+| `prompt` (default) | nothing extra | anything speaking `/chat/completions` |
+| `json_object` | `response_format: {"type": "json_object"}` | recent llama.cpp, Ollama, vLLM, OpenAI |
+| `json_schema` | a strict schema | vLLM, recent llama.cpp, OpenAI |
+
+The default is the weakest on purpose. An endpoint that does not recognise
+`response_format` usually rejects the whole request rather than ignoring the
+field, so a stronger default would fail on first contact with exactly the
+self-hosted servers this tool is aimed at. **Raise it once you know what your
+server supports** — it measurably reduces how often a batch needs a second
+request to fix its formatting.
+
+Either way, a reply that cannot be used earns exactly one reformat retry, with
+the validation errors fed back. Anything still unusable goes to the review
+queue rather than being guessed at. One bad entry never sinks the rest of its
+batch.
+
 ## In place, or somewhere else
 
 **`destination_root` defaults to `path`.** Omit it and files are organized *in
@@ -192,22 +228,25 @@ just demo       # dry run against a throwaway directory tree
 
 Shipped:
 
-- Config, scanner, policy engine, executor, per-profile locking
+- Config, scanner, context builder, policy engine, executor, per-profile locking
 - Dry-run and execute paths, offline `--stub-llm` classifier
 - SQLite state store: append-only journal, review queue, remembered rejections,
   recycle store — with `bower review` and `bower recycle`
+- OpenAI-compatible backend adapter, with batched requests, per-item validation,
+  and configurable structured-output enforcement
 
 Next:
 
-- OpenAI-compatible backend adapter, then Anthropic-compatible
+- Anthropic-compatible backend adapter
 - Filename template syntax, still provisional (ADR-0001, Open Questions)
 
 Deferred by design — see [ADR-0001](docs/ADR-0001-bowerbird-architecture.md):
 watcher daemon, notifications, TUI/GUI front-ends, media-library conventions.
 
-[ADR-0002](docs/ADR-0002-implementation-amendments.md) and
-[ADR-0003](docs/ADR-0003-state-store-amendments.md) record where the
-implementation amends ADR-0001, and why.
+[ADR-0002](docs/ADR-0002-implementation-amendments.md),
+[ADR-0003](docs/ADR-0003-state-store-amendments.md), and
+[ADR-0004](docs/ADR-0004-structured-output-and-the-openai-adapter.md) record
+where the implementation amends ADR-0001, and why.
 
 ## License
 
