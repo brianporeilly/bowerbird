@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Opaque handle the LLM uses to refer to a file.
 ///
@@ -52,6 +52,52 @@ impl fmt::Display for FileId {
 pub struct FileFacts {
     pub size: u64,
     pub mtime: SystemTime,
+}
+
+impl FileFacts {
+    /// The file's mtime as `YYYY-MM-DD`, shifted by `utc_offset_secs`.
+    ///
+    /// This backs the `{date}` filename token. It lives here, next to the fact
+    /// it reports, because the engine fills that token itself rather than
+    /// asking the model for it -- see `policy::template`.
+    ///
+    /// The offset is a *parameter* rather than something read from the
+    /// environment, because this is called from the policy engine and reading
+    /// the system timezone is exactly the kind of ambient input the engine is
+    /// not allowed to have. The caller resolves it once per run and hands it
+    /// in, the same way it hands in [`crate::policy::Occupancy`]. See
+    /// [`crate::local_utc_offset_secs`].
+    ///
+    /// A clock before the epoch yields a pre-1970 date rather than an error. A
+    /// filename is not the place to surface a broken timestamp, and the
+    /// alternative is sending the file to manual review over something no
+    /// human reviewing it could act on.
+    #[must_use]
+    pub fn modified_date(&self, utc_offset_secs: i64) -> String {
+        let secs = self.mtime.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let shifted = i64::try_from(secs).unwrap_or(0).saturating_add(utc_offset_secs);
+        // div_euclid, not `/`: a pre-epoch instant must round *down* to the
+        // earlier day, and integer division truncates toward zero.
+        let (y, m, d) = civil_from_days(shifted.div_euclid(86_400));
+        format!("{y:04}-{m:02}-{d:02}")
+    }
+}
+
+/// Howard Hinnant's `civil_from_days`, the standard branch-free conversion from
+/// a days-since-epoch count to a proleptic Gregorian date. Used so that a date
+/// token needs no date crate.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, u32::try_from(m).unwrap_or(1), u32::try_from(d).unwrap_or(1))
 }
 
 /// One file as observed by the scanner.

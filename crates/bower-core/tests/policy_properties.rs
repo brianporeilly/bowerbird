@@ -146,6 +146,7 @@ fn drive(
         profile: p,
         observed: Some(f.facts),
         rejected: PriorRejections::default(),
+        utc_offset_secs: 0,
     });
     for _ in 0..300 {
         match decision {

@@ -50,6 +50,13 @@ pub struct PlanInput<'a> {
     pub observed: Option<FileFacts>,
     /// What a human has already refused for this exact file.
     pub rejected: PriorRejections<'a>,
+    /// Seconds east of UTC, used to render the `{date}` filename token in the
+    /// user's own day rather than Greenwich's.
+    ///
+    /// Handed in rather than read here: resolving a timezone consults the
+    /// environment, and the engine has no business doing that. `0` is UTC and
+    /// is the right default for a caller that does not care.
+    pub utc_offset_secs: i64,
 }
 
 /// Proposals a human has already refused for one file, looked up by the caller
@@ -225,7 +232,12 @@ fn plan_categorize(input: &PlanInput<'_>, p: &RawProposal) -> Decision {
                 .iter()
                 .filter_map(|(k, v)| sanitize::token(v).map(|v| (k.clone(), v)))
                 .collect();
-            match template::render(template, &tokens, input.file.extension.as_deref()) {
+            match template::render(
+                template,
+                &tokens,
+                input.file.extension.as_deref(),
+                &input.file.facts.modified_date(input.utc_offset_secs),
+            ) {
                 Ok(name) => {
                     let renamed = name != original_name;
                     (name, renamed)

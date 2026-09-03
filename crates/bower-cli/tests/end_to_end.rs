@@ -448,3 +448,151 @@ fn a_dry_run_does_not_contend_for_the_lock() {
     // Previewing what a scheduled run would do should not require waiting for it.
     f.bower(0.0).args(["run", "-p", "downloads", "--stub-llm"]).assert().code(OK);
 }
+
+// --- `bower journal` --------------------------------------------------------
+
+#[test]
+fn the_journal_reports_what_a_run_actually_did_and_how_it_was_decided() {
+    let f = Fixture::new();
+    f.bower(0.0).arg("run").arg("--stub-llm").arg("--execute").assert().code(OK);
+
+    f.bower(0.0)
+        .arg("journal")
+        .assert()
+        .code(OK)
+        // Both phases of each operation, so a crash between them is visible.
+        .stdout(contains("intent"))
+        .stdout(contains("committed"))
+        // The provenance columns: a run whose journal cannot say how a
+        // decision was reached is the thing ADR-0005 exists to prevent.
+        .stdout(contains("model"))
+        .stdout(contains("auto"))
+        .stdout(contains("acme-invoice.pdf"));
+}
+
+#[test]
+fn an_empty_journal_says_so_rather_than_printing_a_bare_table() {
+    let f = Fixture::new();
+    f.bower(0.0).arg("journal").assert().code(OK).stdout(contains("nothing in the journal"));
+}
+
+#[test]
+fn the_journal_can_be_narrowed_to_a_profile_that_has_no_rows() {
+    let f = Fixture::new();
+    f.bower(0.0).arg("run").arg("--stub-llm").arg("--execute").assert().code(OK);
+
+    f.bower(0.0)
+        .arg("journal")
+        .arg("--profile")
+        .arg("nonexistent")
+        .assert()
+        .code(OK)
+        .stdout(contains("nonexistent"));
+}
+
+#[test]
+fn a_clean_run_has_no_failed_or_unresolved_operations() {
+    let f = Fixture::new();
+    f.bower(0.0).arg("run").arg("--stub-llm").arg("--execute").assert().code(OK);
+
+    f.bower(0.0)
+        .arg("journal")
+        .arg("--failed")
+        .assert()
+        .code(OK)
+        .stdout(contains("no failed or unresolved operations"));
+}
+
+// --- `bower config init` ----------------------------------------------------
+
+/// The point of `init` is a file that runs, not a file that parses. Anything
+/// less and it has just moved the hand-editing to after the first error.
+#[test]
+fn config_init_writes_a_config_that_actually_validates() {
+    let home = tempfile::tempdir().unwrap();
+    let target = home.path().join("cfg.toml");
+
+    Command::cargo_bin("bower")
+        .unwrap()
+        .env("HOME", home.path())
+        .arg("config")
+        .arg("init")
+        .arg("--path")
+        .arg(&target)
+        .assert()
+        .code(OK)
+        .stdout(contains("wrote"));
+
+    Command::cargo_bin("bower")
+        .unwrap()
+        .arg("--config")
+        .arg(&target)
+        .arg("config")
+        .arg("check")
+        .assert()
+        .code(OK)
+        .stdout(contains("is valid"));
+}
+
+#[test]
+fn config_init_refuses_to_clobber_an_existing_config_without_force() {
+    let home = tempfile::tempdir().unwrap();
+    let target = home.path().join("cfg.toml");
+    fs::write(&target, "config_version = 1\n").unwrap();
+
+    Command::cargo_bin("bower")
+        .unwrap()
+        .env("HOME", home.path())
+        .arg("config")
+        .arg("init")
+        .arg("--path")
+        .arg(&target)
+        .assert()
+        .code(ERROR)
+        .stderr(contains("already exists"));
+
+    assert_eq!(fs::read_to_string(&target).unwrap(), "config_version = 1\n");
+
+    Command::cargo_bin("bower")
+        .unwrap()
+        .env("HOME", home.path())
+        .arg("config")
+        .arg("init")
+        .arg("--path")
+        .arg(&target)
+        .arg("--force")
+        .assert()
+        .code(OK);
+
+    assert!(fs::read_to_string(&target).unwrap().contains("[[profiles]]"));
+}
+
+/// The generated config sets `stability_wait_minutes = 0`. The example config's
+/// 15 is right for a real downloads folder and wrong for a first run, where it
+/// silently reports finding nothing.
+#[test]
+fn the_generated_config_does_not_hide_files_a_first_run_just_created() {
+    let home = tempfile::tempdir().unwrap();
+    let target = home.path().join("cfg.toml");
+    fs::create_dir_all(home.path().join("Downloads")).unwrap();
+    fs::write(home.path().join("Downloads/note.txt"), "hello").unwrap();
+
+    Command::cargo_bin("bower")
+        .unwrap()
+        .env("HOME", home.path())
+        .arg("config")
+        .arg("init")
+        .arg("--path")
+        .arg(&target)
+        .assert()
+        .code(OK);
+
+    Command::cargo_bin("bower")
+        .unwrap()
+        .arg("--config")
+        .arg(&target)
+        .arg("run")
+        .arg("--stub-llm")
+        .assert()
+        .stdout(contains("scanned 1 file"));
+}

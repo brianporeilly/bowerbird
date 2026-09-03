@@ -271,11 +271,11 @@ fn confirm(assume_yes: bool, question: &str) -> Result<bool> {
     Ok(matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
 }
 
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-fn age(at: u64) -> String {
+pub(crate) fn age(at: u64) -> String {
     let secs = now_secs().saturating_sub(at);
     let days = secs / 86_400;
     if days > 0 {
@@ -289,7 +289,7 @@ fn age(at: u64) -> String {
 }
 
 /// Reads `30d`, `2w`, `12h`, `45m`, or a bare number of seconds.
-fn parse_duration(text: &str) -> Result<Duration> {
+pub(crate) fn parse_duration(text: &str) -> Result<Duration> {
     let text = text.trim();
     let (value, unit) = text.split_at(text.len().saturating_sub(1));
     let (value, multiplier) = match unit {

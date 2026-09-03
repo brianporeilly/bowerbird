@@ -186,7 +186,8 @@ impl Origin {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Model => "model",
             Self::Rule => "rule",
@@ -206,7 +207,8 @@ impl DecidedBy {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
             Self::Human => "human",

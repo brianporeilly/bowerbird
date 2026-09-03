@@ -12,8 +12,9 @@
 //! thresholds, so a realistic run exercises the manual-review path as well as
 //! the happy one.
 
-use bower_core::llm::{BatchRequest, BatchResponse, LlmBackend, LlmError};
-use bower_core::model::{FileRecord, Proposal, ProposalOutcome, RawProposal};
+use bower_core::context::{BatchContext, FileContext};
+use bower_core::llm::{BatchResponse, LlmBackend, LlmError};
+use bower_core::model::{Proposal, ProposalOutcome, RawProposal};
 use std::collections::BTreeMap;
 
 /// Extension groups, mapped to the category names the ADR's example config
@@ -47,16 +48,15 @@ impl LlmBackend for StubBackend {
         "stub"
     }
 
-    fn classify(&self, request: BatchRequest<'_>) -> Result<BatchResponse, LlmError> {
+    fn classify(&self, ctx: &BatchContext) -> Result<BatchResponse, LlmError> {
         let mut outcomes = BTreeMap::new();
-        for file in request.files {
+        for file in &ctx.files {
             let guess = guess_category(file);
-            let category = resolve_against(request.profile, &guess);
-            let is_new_category =
-                !request.profile.categories.iter().any(|c| c.eq_ignore_ascii_case(&category));
+            let category = resolve_against(ctx, &guess);
+            let is_new_category = !ctx.categories.iter().any(|c| c.eq_ignore_ascii_case(&category));
 
             let proposal = RawProposal {
-                file_id: file.id.clone(),
+                file_id: file.file_id.clone(),
                 category,
                 is_new_category,
                 name_tokens: tokens(file),
@@ -67,13 +67,14 @@ impl LlmBackend for StubBackend {
                     file.mime.as_deref().unwrap_or("unknown"),
                 ),
             };
-            outcomes.insert(file.id.clone(), ProposalOutcome::Ok(Proposal::Categorize(proposal)));
+            outcomes
+                .insert(file.file_id.clone(), ProposalOutcome::Ok(Proposal::Categorize(proposal)));
         }
         Ok(BatchResponse { outcomes })
     }
 }
 
-fn guess_category(file: &FileRecord) -> String {
+fn guess_category(file: &FileContext) -> String {
     let ext = file.extension.as_deref().unwrap_or_default();
     GUESSES
         .iter()
@@ -82,54 +83,39 @@ fn guess_category(file: &FileRecord) -> String {
         .to_owned()
 }
 
-/// Prefers a category the profile actually declares, so the stub does not
+/// Prefers a category the context actually declares, so the stub does not
 /// invent categories on profiles that forbid them.
-fn resolve_against(profile: &bower_config::Profile, guess: &str) -> String {
-    if let Some(declared) = profile.categories.iter().find(|c| c.eq_ignore_ascii_case(guess)) {
+fn resolve_against(ctx: &BatchContext, guess: &str) -> String {
+    if let Some(declared) = ctx.categories.iter().find(|c| c.eq_ignore_ascii_case(guess)) {
         return declared.clone();
     }
-    if profile.allow_dynamic_categories {
+    if ctx.allow_new_categories {
         return guess.to_owned();
     }
-    profile.categories.first().cloned().unwrap_or_else(|| guess.to_owned())
+    ctx.categories.first().cloned().unwrap_or_else(|| guess.to_owned())
 }
 
-fn tokens(file: &FileRecord) -> BTreeMap<String, String> {
+/// The stub's whole token vocabulary: `name`, `vendor`, `doc_type`.
+///
+/// Deliberately fixed rather than derived from `ctx.filename_tokens`. A
+/// template asking for something else gets a `MissingToken` and the file goes
+/// to manual review -- which is exactly what a real model declining to supply a
+/// token does, and worth exercising. Inventing a value for every name a
+/// template happens to mention would hide that path.
+///
+/// `date` is absent because the engine fills `{date}` from the file's mtime; a
+/// value proposed here would be ignored.
+fn tokens(file: &FileContext) -> BTreeMap<String, String> {
     let mut tokens = BTreeMap::new();
-    let (stem, _) = bower_core::model::split_extension(file.file_name());
+    let (stem, _) = bower_core::model::split_extension(&file.file_name);
     tokens.insert("name".to_owned(), stem.to_owned());
     tokens.insert("vendor".to_owned(), first_word(stem).to_owned());
     tokens.insert("doc_type".to_owned(), guess_category(file).to_lowercase());
-    tokens.insert("date".to_owned(), date_of(file));
     tokens
 }
 
 fn first_word(stem: &str) -> &str {
     stem.split(['-', '_', ' ', '.']).find(|s| !s.is_empty()).unwrap_or(stem)
-}
-
-/// The file's mtime as `YYYY-MM-DD`, computed from the Unix epoch by civil-date
-/// arithmetic so the stub needs no date crate.
-fn date_of(file: &FileRecord) -> String {
-    let secs = file.facts.mtime.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let (y, m, d) = civil_from_days(i64::try_from(secs / 86_400).unwrap_or(0));
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-/// Howard Hinnant's `civil_from_days`, the standard branch-free conversion from
-/// a days-since-epoch count to a proleptic Gregorian date.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, u32::try_from(m).unwrap_or(1), u32::try_from(d).unwrap_or(1))
 }
 
 /// Deterministic pseudo-confidence in `0.60..=0.99`, derived from the file id so
@@ -138,8 +124,8 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 /// The band deliberately straddles a typical threshold: a demo run should show
 /// files being filed *and* files being held back, since exercising the
 /// manual-review path is most of the point of having a stub at all.
-fn confidence(file: &FileRecord) -> f32 {
-    let sum: u32 = file.id.as_str().bytes().map(u32::from).sum();
+fn confidence(file: &FileContext) -> f32 {
+    let sum: u32 = file.file_id.as_str().bytes().map(u32::from).sum();
     let bucket = sum % 40;
     #[allow(clippy::cast_precision_loss)]
     {
@@ -151,27 +137,30 @@ fn confidence(file: &FileRecord) -> f32 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn epoch_and_a_known_date_convert_correctly() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        // 2024-03-15 is 19797 days after the epoch.
-        assert_eq!(civil_from_days(19_797), (2024, 3, 15));
+    fn file(id: &str) -> FileContext {
+        FileContext {
+            file_id: bower_core::model::FileId::for_path(std::path::Path::new(id)),
+            file_name: id.to_owned(),
+            relative_dir: None,
+            extension: None,
+            size_bytes: 0,
+            mime: None,
+            content_excerpt: None,
+        }
     }
 
     #[test]
     fn confidence_stays_in_band() {
         for id in ["f_00000000", "f_ffffffff", "f_0af3c1aa"] {
-            let file = FileRecord {
-                id: bower_core::model::FileId::for_path(std::path::Path::new(id)),
-                path: std::path::PathBuf::from(id),
-                relative: std::path::PathBuf::from(id),
-                facts: bower_core::model::FileFacts { size: 0, mtime: std::time::UNIX_EPOCH },
-                extension: None,
-                mime: None,
-                content_snippet: None,
-            };
-            let c = confidence(&file);
+            let c = confidence(&file(id));
             assert!((0.60..=0.99).contains(&c), "{id} -> {c}");
         }
+    }
+
+    /// The engine fills `{date}` from the file's mtime, which the stub is not
+    /// told. Proposing one would be proposing a value that is ignored.
+    #[test]
+    fn the_stub_does_not_propose_a_date_token() {
+        assert!(!tokens(&file("invoice.pdf")).contains_key("date"));
     }
 }

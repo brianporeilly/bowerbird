@@ -8,9 +8,14 @@
 use bower_config::Profile;
 use std::collections::BTreeMap;
 
+use crate::context::BatchContext;
 use crate::model::{FileId, FileRecord, ProposalOutcome};
 
-/// One batch of files to classify.
+/// One batch of files, as the core holds them.
+///
+/// This is the *input to the context builder*, not to a backend: it still
+/// carries the profile and the raw records. [`crate::context::build`] reduces
+/// it to a [`BatchContext`], which is what a backend actually receives.
 #[derive(Debug, Clone, Copy)]
 pub struct BatchRequest<'a> {
     /// Supplies the category list, the human description of the directory's
@@ -52,13 +57,19 @@ pub enum LlmError {
     MissingApiKey { backend: String, var: String },
 }
 
-/// A classifier. Implementations must not touch the filesystem; they receive
-/// already-gathered [`FileRecord`]s and return proposals.
+/// A classifier.
+///
+/// It receives a [`BatchContext`] -- what the core has already decided the
+/// model may see -- not a profile and a list of files. A backend therefore
+/// cannot consult a policy setting the context builder chose not to disclose,
+/// cannot reach a `FileRecord`'s absolute path, and cannot widen disclosure by
+/// reading a field nobody meant to send. Deciding what leaves the machine stays
+/// in one place: [`crate::context`].
 pub trait LlmBackend: Send + Sync {
     fn name(&self) -> &str;
 
     /// Classifies one batch. Transport-level retries belong inside the
     /// implementation; a returned error means the batch could not be
     /// classified at all.
-    fn classify(&self, request: BatchRequest<'_>) -> Result<BatchResponse, LlmError>;
+    fn classify(&self, ctx: &BatchContext) -> Result<BatchResponse, LlmError>;
 }

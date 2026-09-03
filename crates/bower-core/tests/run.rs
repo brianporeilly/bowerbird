@@ -8,8 +8,9 @@
 //! The orchestrator end to end, against real directories and a real store.
 
 use bower_config::{Metadata, OnConflict, Profile, Rename, ReviewPlacement};
+use bower_core::context::BatchContext;
 use bower_core::exec::Mode;
-use bower_core::llm::{BatchRequest, BatchResponse, LlmBackend, LlmError};
+use bower_core::llm::{BatchResponse, LlmBackend, LlmError};
 use bower_core::model::{Proposal, ProposalOutcome, RawProposal};
 use bower_core::run::{RunOptions, RunReport, run_profile};
 use bower_core::scan::ScanOptions;
@@ -40,13 +41,13 @@ impl LlmBackend for Fixed {
         "fixed"
     }
 
-    fn classify(&self, request: BatchRequest<'_>) -> Result<BatchResponse, LlmError> {
+    fn classify(&self, ctx: &BatchContext) -> Result<BatchResponse, LlmError> {
         let mut outcomes = BTreeMap::new();
-        for file in request.files {
+        for file in &ctx.files {
             outcomes.insert(
-                file.id.clone(),
+                file.file_id.clone(),
                 ProposalOutcome::Ok(Proposal::Categorize(RawProposal {
-                    file_id: file.id.clone(),
+                    file_id: file.file_id.clone(),
                     category: self.category.clone(),
                     is_new_category: false,
                     name_tokens: BTreeMap::new(),
@@ -93,6 +94,7 @@ fn options(mode: Mode) -> RunOptions {
         scan: ScanOptions::default(),
         review_placement: ReviewPlacement::InPlace,
         quarantine_dir: None,
+        utc_offset_secs: 0,
     }
 }
 

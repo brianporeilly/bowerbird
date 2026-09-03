@@ -151,6 +151,11 @@ bower run                                        exactly one profile defined -> 
                                                  more than one -> error, list them
 
 bower config check                               validate config, list profiles
+bower config init [--path P] [--force]           write a starter config for this machine
+
+bower journal [--profile N] [--limit N]          what was actually done
+bower journal --failed                           failures, and intents with no result
+bower journal --since 2h                         only recent rows
 
 bower review list [--profile N] [--type T]       what is waiting on a decision
 bower review show <id>                           one item in full
@@ -245,9 +250,10 @@ watcher daemon, notifications, TUI/GUI front-ends, media-library conventions.
 
 [ADR-0002](docs/ADR-0002-implementation-amendments.md),
 [ADR-0003](docs/ADR-0003-state-store-amendments.md),
-[ADR-0004](docs/ADR-0004-structured-output-and-the-openai-adapter.md), and
-[ADR-0005](docs/ADR-0005-journal-provenance.md) record where the implementation
-amends ADR-0001, and why.
+[ADR-0004](docs/ADR-0004-structured-output-and-the-openai-adapter.md),
+[ADR-0005](docs/ADR-0005-journal-provenance.md), and
+[ADR-0006](docs/ADR-0006-engine-tokens-and-the-backend-port.md) record where the
+implementation amends ADR-0001, and why.
 
 [ROADMAP.md](docs/ROADMAP.md) holds the longer view: what is decided, what is
 open, and the reasoning behind both. It is direction rather than commitment, and
