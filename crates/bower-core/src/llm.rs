@@ -51,6 +51,19 @@ pub enum LlmError {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+    /// Separate from [`LlmError::Unreachable`] because the remedy is different
+    /// and the obvious reading is wrong: a server that is answering perfectly
+    /// well, just slowly, reports as "unreachable" otherwise. A local model
+    /// commonly needs tens of seconds per file, so the first thing to change is
+    /// the batch size -- each request carries its own timeout budget, so
+    /// smaller batches turn a hard failure into a slower run.
+    #[error(
+        "backend `{backend}` did not answer within {timeout_secs}s. \
+         If the server is up, it is just slower than that: lower `batch_size` \
+         for the profile (each request gets its own budget), or raise \
+         `timeout_secs` for the backend."
+    )]
+    Timeout { backend: String, timeout_secs: u64 },
     #[error("backend `{backend}` returned an unusable response: {detail}")]
     BadResponse { backend: String, detail: String },
     #[error("environment variable `{var}` (api_key_env for backend `{backend}`) is not set")]

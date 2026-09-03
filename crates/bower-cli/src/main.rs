@@ -172,7 +172,9 @@ endpoint = "http://localhost:8080/v1"
 # local server that wants no authentication.
 api_key_env = ""
 model = "llama-3.1-8b-instruct"
-timeout_secs = 30
+# A self-hosted model is measured in seconds per file. 30 is a cloud API's
+# number and will time out on a local one.
+timeout_secs = 300
 max_retries = 2
 
 # "prompt" is the weakest and the most compatible: an endpoint that does not
@@ -190,6 +192,10 @@ llm_backend = "local"
 categories = ["Documents", "Images", "Installers", "Archives", "Media"]
 allow_dynamic_categories = true
 allow_delete_suggestions = false
+# Files per request. Lower this before raising timeout_secs: each request
+# carries its own budget, so smaller batches turn a hard failure into a slower
+# run.
+batch_size = 8
 confidence_threshold = 0.75
 on_conflict = "quarantine"
 
