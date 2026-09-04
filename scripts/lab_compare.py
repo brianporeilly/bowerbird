@@ -13,10 +13,50 @@ journal stays append-only and the query just takes the latest row per file.
 
 import sqlite3
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 HELD = "—"
+
+
+def completed(db, profile, since):
+    """How many files of `profile`'s current run have reached a terminal state.
+
+    Read-only, and safe to call while a run is in flight: the store opens in
+    WAL mode, so a reader never blocks the writer.
+
+    `since` is a unix timestamp taken just before the run started, and it is not
+    optional. The journal is append-only and the lab does not wipe it between
+    runs, so an unscoped count includes every previous run of the same profile
+    -- which on a corpus run repeatedly reads as progress well past 100%.
+
+    A file counts once it has either a non-intent journal row (it moved, or the
+    move failed) or a review-queue row (a human has to decide). An `intent` with
+    no result is a file still in flight, and is deliberately not counted.
+
+    Returns 0 rather than raising if the database is not there yet -- on a first
+    run it is created a moment after the process starts.
+    """
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return 0
+    try:
+        done = con.execute(
+            "SELECT COUNT(DISTINCT source) FROM journal "
+            "WHERE profile = ? AND phase != 'intent' AND at >= ?",
+            (profile, since),
+        ).fetchone()[0]
+        queued = con.execute(
+            "SELECT COUNT(*) FROM review_queue WHERE profile = ? AND created_at >= ?",
+            (profile, since),
+        ).fetchone()[0]
+        return done + queued
+    except sqlite3.Error:
+        # Mid-migration, or the schema is newer than this script. Progress is
+        # not worth failing a run over.
+        return 0
+    finally:
+        con.close()
 
 
 def load(db):
@@ -60,7 +100,16 @@ def load(db):
 
 
 def main():
-    db = sys.argv[1] if len(sys.argv) > 1 else "lab/state.db"
+    argv = sys.argv[1:]
+
+    # `--completed PROFILE DB` is used by lab.sh's progress line, which polls
+    # while a run is in flight.
+    if argv and argv[0] == "--completed":
+        # --completed PROFILE SINCE DB
+        print(completed(argv[3], argv[1], int(argv[2])))
+        return 0
+
+    db = argv[0] if argv else "lab/state.db"
     files, profiles, cells = load(db)
 
     if not files:

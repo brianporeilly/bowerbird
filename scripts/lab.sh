@@ -108,6 +108,93 @@ cmd_corpus() {
     note "source directory untouched; raise LAB_CORPUS_LIMIT to take more"
 }
 
+fmt_duration() {
+    local s=$1
+    if [ "$s" -ge 3600 ]; then
+        printf '%dh%02dm' $((s / 3600)) $(((s % 3600) / 60))
+    elif [ "$s" -ge 60 ]; then
+        printf '%dm%02ds' $((s / 60)) $((s % 60))
+    else
+        printf '%ds' "$s"
+    fi
+}
+
+elapsed_since() { fmt_duration $(($(date +%s) - $1)); }
+
+# Draws one line, rewritten in place, until `pid` exits.
+#
+# Progress is read from the state database rather than extrapolated from an
+# assumed per-file rate: the store is in WAL mode, so polling never blocks the
+# run, and a file counts once it has actually reached a terminal state. The
+# estimate then comes from the rate observed *in this run*, which matters
+# because the same corpus takes wildly different times on different models.
+#
+# Falls back to a plain elapsed clock if the count is unavailable for any
+# reason -- no python3, or a schema this script does not know. Progress
+# reporting must never be the thing that fails a run.
+watch_progress() {
+    local model="$1" total="$2" started="$3" pid="$4"
+    local done=0
+
+    # Not a terminal: no rewriting. A line every 30s, so a piped or CI run
+    # leaves a readable trace instead of thousands of escape sequences.
+    if [ ! -t 2 ]; then
+        while kill -0 "$pid" 2>/dev/null; do
+            sleep 30
+            kill -0 "$pid" 2>/dev/null || break
+            done=$(progress_count "$model" "$started")
+            printf '    %s: %s/%s files, %s elapsed\n' \
+                "$model" "$done" "$total" "$(elapsed_since "$started")" >&2
+        done
+        return 0
+    fi
+
+    while kill -0 "$pid" 2>/dev/null; do
+        done=$(progress_count "$model" "$started")
+        [ "$done" -gt "$total" ] && done="$total"
+        draw_progress "$model" "$done" "$total" "$started"
+        sleep 2
+    done
+
+    # Clear the line so the run's own output starts clean.
+    printf '\r\033[K' >&2
+}
+
+progress_count() {
+    local model="$1" started="$2"
+    python3 "$REPO/scripts/lab_compare.py" \
+        --completed "$model" "$started" "$LAB/state.db" 2>/dev/null || echo 0
+}
+
+draw_progress() {
+    local model="$1" done="$2" total="$3" started="$4"
+    local width=24 filled=0 pct=0 elapsed remaining=""
+
+    elapsed=$(($(date +%s) - started))
+    if [ "$total" -gt 0 ]; then
+        pct=$((done * 100 / total))
+        filled=$((done * width / total))
+    fi
+
+    # At least two completions before estimating, and only from this run's own
+    # rate. One file is a single sample that includes model warm-up and the
+    # whole first batch's latency; extrapolating it produces numbers like
+    # "1h06m left" on a ten-minute run, which is a guess wearing the costume of
+    # a measurement.
+    if [ "$done" -ge 2 ] && [ "$done" -lt "$total" ] && [ "$elapsed" -gt 0 ]; then
+        remaining="  ~$(fmt_duration $(((total - done) * elapsed / done))) left"
+    fi
+
+    local bar="" i=0
+    while [ "$i" -lt "$width" ]; do
+        if [ "$i" -lt "$filled" ]; then bar="$bar#"; else bar="$bar."; fi
+        i=$((i + 1))
+    done
+
+    printf '\r\033[K    %s [%s] %3d%%  %s/%s  %s%s' \
+        "$model" "$bar" "$pct" "$done" "$total" "$(fmt_duration "$elapsed")" "$remaining" >&2
+}
+
 # Resets one model's inbox from the corpus and runs that profile.
 run_one() {
     local model="$1"
@@ -120,15 +207,27 @@ run_one() {
     mkdir -p "$inbox" "$LAB/runs/$model/organized"
     cp -a "$LAB/corpus/." "$inbox/"
 
-    note "--- $model: $(ls -1 "$inbox" | wc -l) file(s) ---"
-    local started
+    local total
+    total=$(ls -1 "$inbox" | wc -l)
+    note "--- $model: $total file(s) ---"
+
+    local started output rc=0
     started=$(date +%s)
+    output=$(mktemp)
+
+    # Run detached so a progress line can be drawn while it works. The run's own
+    # output is held back until the end: interleaving it with a line being
+    # rewritten in place produces a mess.
+    "$BIN" --config "$CONFIG" run --profile "$model" --execute >"$output" 2>&1 &
+    local pid=$!
+    watch_progress "$model" "$total" "$started" "$pid"
     # Bowerbird's own exit code 2 means "items need a human", which is a
     # perfectly good outcome for a lab run, so it is not an error here.
-    local rc=0
-    "$BIN" --config "$CONFIG" run --profile "$model" --execute || rc=$?
-    note "    $(( $(date +%s) - started ))s"
-    # 2 is "items need a human", which is a fine outcome for a lab run.
+    wait "$pid" || rc=$?
+
+    cat "$output" >&2
+    rm -f "$output"
+    note "    $(elapsed_since "$started")"
     [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]
 }
 
