@@ -37,9 +37,23 @@ need_config() {
 }
 
 # Profile names, which are also the run-directory names.
+#
+# Parses the [[profiles]] blocks rather than matching names that also appear as
+# a backend. A profile is often named after its model, but not when you are
+# varying a *setting* -- two profiles on one backend with different
+# content_sniff_bytes is the whole point -- and those names appear once.
 profiles() {
     need_config
-    sed -n 's/^name = "\(.*\)"$/\1/p' "$CONFIG" | awk 'seen[$0]++ == 1'
+    awk '
+        /^[[:space:]]*\[\[profiles\]\]/ { in_profile = 1; next }
+        /^[[:space:]]*\[\[/              { in_profile = 0 }
+        in_profile && /^[[:space:]]*name[[:space:]]*=/ {
+            if (match($0, /"[^"]*"/)) {
+                print substr($0, RSTART + 1, RLENGTH - 2)
+                in_profile = 0
+            }
+        }
+    ' "$CONFIG"
 }
 
 cmd_init() {

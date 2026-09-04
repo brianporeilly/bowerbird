@@ -76,7 +76,10 @@ def main():
         return f"{category} {confidence:.2f}" if confidence is not None else category
 
     width = max([len(f) for f in files] + [4])
-    colw = max(18, max((len(p) for p in profiles), default=8) + 2)
+    # Widest actual cell, not just the widest header: "Correspondence 0.98" is
+    # longer than any profile name and would otherwise run into the next column.
+    rendered = [render(cells.get((f, p))) for f in files for p in profiles]
+    colw = max([len(p) for p in profiles] + [len(c) for c in rendered] + [6]) + 2
 
     print(f"{'file':<{width}}  " + "".join(f"{p:<{colw}}" for p in profiles))
     print("-" * (width + 2 + colw * len(profiles)))

@@ -53,10 +53,25 @@ max_retries = 2
 structured_output = "json_schema"
 
 
-# --- One profile per model ----------------------------------------------------
+# --- One profile per thing you are comparing ----------------------------------
+#
+# A profile is a column in `lab.sh compare`, so it does not have to be a model.
+# To measure a *setting*, add a profile pointing at the same backend and change
+# one thing:
+#
+#     [[profiles]]
+#     name = "qwen3b-sniff"                      # a new column
+#     path = "__LAB__/runs/qwen3b-sniff/inbox"   # its own copy of the corpus
+#     destination_root = "__LAB__/runs/qwen3b-sniff/organized"
+#     llm_backend = "qwen3b"                     # same model
+#     ...
+#     [profiles.metadata]
+#     content_sniff_bytes = 4000                 # the one difference
+#
+# Vary exactly one thing per profile. Two differences and the column tells you
+# nothing about either.
+#
 # `name` must match the run directory under __LAB__/runs/.
-# Keep every setting below identical across profiles: the point is to vary the
-# model and nothing else.
 
 [[profiles]]
 name = "qwen3b"
