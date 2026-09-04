@@ -6,3 +6,6 @@
 /bowerbird.toml
 /state.db
 /locks/
+
+# Model-comparison lab: real files, real results, never committed.
+/lab/

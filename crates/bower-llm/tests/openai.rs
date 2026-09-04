@@ -455,3 +455,32 @@ fn a_deletion_suggestion_survives_the_wire_intact() {
         other => panic!("expected a deletion suggestion, got {other:?}"),
     }
 }
+
+/// A server that is up and merely slow must not be reported as unreachable.
+/// The obvious reading of "unreachable" is that the endpoint is wrong or the
+/// process is down; for a local model the real cause is usually a batch too
+/// large for the timeout, and the error should say so.
+#[test]
+fn a_slow_backend_reports_a_timeout_with_the_remedy_not_unreachable() {
+    let server = MockServer::new(vec![
+        Reply::assistant(r#"{"proposals":[]}"#).after(Duration::from_millis(600)),
+    ]);
+    let mut cfg = backend(server.endpoint());
+    cfg.timeout = Duration::from_millis(100);
+    cfg.max_retries = 0;
+    let adapter = OpenAiBackend::new(&cfg);
+
+    let files = vec![record("a.pdf")];
+    let err = adapter
+        .classify(&bower_core::context::build(BatchRequest { profile: &profile(), files: &files }))
+        .unwrap_err();
+
+    assert!(
+        matches!(err, bower_core::llm::LlmError::Timeout { .. }),
+        "expected a timeout, got {err:?}"
+    );
+
+    let text = err.to_string();
+    assert!(text.contains("did not answer"), "{text}");
+    assert!(text.contains("batch_size"), "the error should name the first thing to change: {text}");
+}

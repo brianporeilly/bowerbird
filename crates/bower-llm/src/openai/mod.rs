@@ -48,6 +48,9 @@ pub struct OpenAiBackend {
     backoff: Duration,
     key_source: KeySource,
     agent: ureq::Agent,
+    /// Kept alongside the agent that enforces it, so a timeout can say how long
+    /// it waited. `ureq` does not report that back in the error.
+    timeout: Duration,
 }
 
 /// Where a named credential is looked up. The environment today; a keyring or
@@ -93,6 +96,7 @@ impl OpenAiBackend {
             backoff: DEFAULT_BACKOFF,
             key_source: key_from_env,
             agent,
+            timeout: backend.timeout,
         }
     }
 
@@ -180,12 +184,21 @@ impl OpenAiBackend {
         let mut response = request.send(payload).map_err(|e| {
             // Connection-level failures are worth another go; a malformed URL
             // or a TLS refusal is not.
-            let err = LlmError::Unreachable { backend: self.name.clone(), source: Box::new(e) };
-            if matches!(
-                &err,
-                LlmError::Unreachable { source, .. }
-                    if is_transient(source.as_ref())
-            ) {
+            let err = if matches!(e, ureq::Error::Timeout(_)) {
+                LlmError::Timeout {
+                    backend: self.name.clone(),
+                    timeout_secs: self.timeout.as_secs(),
+                }
+            } else {
+                LlmError::Unreachable { backend: self.name.clone(), source: Box::new(e) }
+            };
+            if matches!(&err, LlmError::Timeout { .. })
+                || matches!(
+                    &err,
+                    LlmError::Unreachable { source, .. }
+                        if is_transient(source.as_ref())
+                )
+            {
                 Attempt::Retryable(err)
             } else {
                 Attempt::Fatal(err)

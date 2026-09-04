@@ -82,3 +82,30 @@ demo:
          s|/data/_review|$dir/_review|; s|^stability_wait_minutes = .*|stability_wait_minutes = 0|" \
         bowerbird.example.toml > "$dir/config.toml"
     cargo run --quiet -- --config "$dir/config.toml" run --profile downloads --stub-llm
+
+# --- Model-comparison lab -----------------------------------------------------
+# Runs one corpus past several models and shows where they disagree. Everything
+# lives in lab/, which is gitignored. See scripts/lab.sh.
+
+# Scaffold lab/ and write lab/lab.toml.
+lab-init:
+    ./scripts/lab.sh init
+
+# Copy real files into the corpus. Copies; never touches the source.
+lab-corpus dir:
+    ./scripts/lab.sh corpus {{dir}}
+
+# Run one model, or --all. Needs a release binary: `just build-release`.
+lab-run target="--all":
+    ./scripts/lab.sh run {{target}}
+
+# Show where the models disagreed.
+lab-compare:
+    ./scripts/lab.sh compare
+
+# Wipe runs and state, keeping the corpus and config.
+lab-reset:
+    ./scripts/lab.sh reset
+
+build-release:
+    cargo build --release

@@ -12,12 +12,16 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 /// One scripted response.
 #[derive(Debug, Clone)]
 pub struct Reply {
     pub status: u16,
     pub body: String,
+    /// Held before answering, to script a server that is up and simply slow --
+    /// which is the case a timeout must not report as "unreachable".
+    pub delay: Duration,
 }
 
 impl Reply {
@@ -30,11 +34,19 @@ impl Reply {
                 "choices": [{ "message": { "role": "assistant", "content": content } }]
             })
             .to_string(),
+            delay: Duration::ZERO,
         }
     }
 
     pub fn status(status: u16, body: &str) -> Self {
-        Self { status, body: body.to_owned() }
+        Self { status, body: body.to_owned(), delay: Duration::ZERO }
+    }
+
+    /// The same reply, but not until `delay` has passed.
+    #[must_use]
+    pub fn after(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
     }
 }
 
@@ -139,6 +151,9 @@ impl Drop for MockServer {
 /// round is a race: the client can observe its reply and assert on
 /// `request_count()` while this thread has not pushed yet.
 fn serve(stream: TcpStream, reply: &Reply, recorded: &Mutex<Vec<Recorded>>) -> Option<Recorded> {
+    if !reply.delay.is_zero() {
+        std::thread::sleep(reply.delay);
+    }
     let mut reader = BufReader::new(stream.try_clone().ok()?);
 
     let mut request_line = String::new();
