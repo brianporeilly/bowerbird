@@ -149,10 +149,19 @@ watch_progress() {
         return 0
     fi
 
+    # Work lands in bursts of `batch_size`, so the rate must be measured at the
+    # moments files actually complete. Measuring against "now" between batches
+    # makes the estimate climb while nothing is happening.
+    local at_last_change=0
     while kill -0 "$pid" 2>/dev/null; do
-        done=$(progress_count "$model" "$started")
-        [ "$done" -gt "$total" ] && done="$total"
-        draw_progress "$model" "$done" "$total" "$started"
+        local seen
+        seen=$(progress_count "$model" "$started")
+        [ "$seen" -gt "$total" ] && seen="$total"
+        if [ "$seen" -ne "$done" ]; then
+            done="$seen"
+            at_last_change=$(($(date +%s) - started))
+        fi
+        draw_progress "$model" "$done" "$total" "$started" "$at_last_change"
         sleep 2
     done
 
@@ -166,8 +175,13 @@ progress_count() {
         --completed "$model" "$started" "$LAB/state.db" 2>/dev/null || echo 0
 }
 
+# `at_last_change` is the elapsed time when the count last moved. The estimate
+# is computed from that, not from the current clock: files complete in bursts of
+# `batch_size`, so dividing by a clock that keeps ticking between bursts makes
+# the estimate grow while nothing is happening -- observed climbing from
+# ~12m47s to ~20m21s across one batch, on a run whose first estimate was right.
 draw_progress() {
-    local model="$1" done="$2" total="$3" started="$4"
+    local model="$1" done="$2" total="$3" started="$4" at_last_change="$5"
     local width=24 filled=0 pct=0 elapsed remaining=""
 
     elapsed=$(($(date +%s) - started))
@@ -176,13 +190,15 @@ draw_progress() {
         filled=$((done * width / total))
     fi
 
-    # At least two completions before estimating, and only from this run's own
-    # rate. One file is a single sample that includes model warm-up and the
-    # whole first batch's latency; extrapolating it produces numbers like
-    # "1h06m left" on a ten-minute run, which is a guess wearing the costume of
-    # a measurement.
-    if [ "$done" -ge 2 ] && [ "$done" -lt "$total" ] && [ "$elapsed" -gt 0 ]; then
-        remaining="  ~$(fmt_duration $(((total - done) * elapsed / done))) left"
+    if [ "$done" -eq 0 ]; then
+        # Nothing has finished yet, and on a slow model the first batch can be
+        # over a minute. Say why the bar is empty rather than looking hung.
+        remaining="  first batch in flight"
+    elif [ "$done" -ge 2 ] && [ "$done" -lt "$total" ] && [ "$at_last_change" -gt 0 ]; then
+        # At least two completions, and only from this run's own rate. One file
+        # is a single sample carrying model warm-up and the whole first batch's
+        # latency; extrapolating it says "1h06m left" on a ten-minute run.
+        remaining="  ~$(fmt_duration $(((total - done) * at_last_change / done))) left"
     fi
 
     local bar="" i=0
