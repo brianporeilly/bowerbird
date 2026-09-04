@@ -114,6 +114,10 @@ allow_delete_suggestions = false
 # answering at 15s per file needs several minutes for a batch of 25, and one
 # slow batch fails every file in it.
 batch_size = 8
+# Below this, a file goes to review instead of being filed. Worth knowing: this
+# relies on the model reporting its own confidence honestly, and small models
+# measured so far do not -- a 3B returned 0.85-0.99 on everything, including
+# files it got wrong. The deterministic checks are what hold; this is a hint.
 confidence_threshold = 0.7
 
 # skip | suffix | quarantine. Bowerbird never overwrites, whichever you pick.

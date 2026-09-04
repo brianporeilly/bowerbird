@@ -105,6 +105,52 @@ yet needs it and a second date token is a thing users will get wrong.
 
 ---
 
+### Open: the confidence gate does not fire on small models
+
+Measured, not theorised. Live runs against llama.cpp serving
+Qwen2.5-3B-Instruct Q4_K_M returned confidence **0.85–0.99 on every file of
+every run**, including ones it misfiled — a `.zip` filed under `Photos` at 0.90.
+A threshold anywhere in that band never fires, so `confidence_threshold` is
+inert and the review queue never fills from it.
+
+This is not a prompting problem. The system prompt already says, in as many
+words, that low confidence sends the file to a human and that overstating it is
+worse than admitting doubt. The model complied with everything else in that
+prompt and ignored this.
+
+The distinction that matters is **measured versus asked**. A number the model
+reports about itself is a token like any other. A number derived from the
+decoding process — token logprobs, agreement across N samples — is a
+measurement. Only the second is a signal. (Framing owed to the
+`assistant-project` session, which hit the same wall on a 4–6GB card and whose
+ASR quality gate stays valid for exactly this reason: `avg_logprob` is measured,
+not asked.)
+
+What still works, and what actually filled the review queue in those runs:
+schema validation, the staleness check, category resolution against a closed
+taxonomy, template rendering with a missing token, and the collision check.
+Every one is deterministic. The pipeline's safety does not rest on the gate —
+which is the design holding up, not an excuse.
+
+**Options, none taken yet:**
+
+- Sample N times at temperature and gate on agreement rather than on the
+  self-report. Costs N× the tokens, on the slowest part of the pipeline.
+- Use logprobs where the endpoint exposes them. Not in the OpenAI-compatible
+  surface consistently, so it would be a per-backend capability like
+  `structured_output`.
+- Leave the gate for large models, where it may well discriminate, and document
+  that it does not on small ones. Cheapest, and honest.
+
+**Evidence that would settle it:** the same corpus through a larger model via
+`scripts/lab.sh`. If a 70B spreads its confidence and a 3B does not, the gate is
+worth keeping with a caveat. If neither does, it should stop being described as
+a safety stage.
+
+Until then, do not add anything that depends on the gate discriminating.
+
+---
+
 ## Filesystem scope (still the primary product)
 
 ### Rule-based fast path

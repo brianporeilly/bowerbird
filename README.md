@@ -205,6 +205,13 @@ review, none can skip a later one:
    is never an overwrite
 7. Confidence gate (deletion suggestions ignore this entirely — always manual)
 
+Stages 1–6 are deterministic and are what the safety guarantees actually rest
+on. Stage 7 depends on the model reporting its own confidence honestly, and
+measurement says small models do not: a 3B model returned 0.85–0.99 on every
+file including ones it misfiled, so a threshold in that band never fires. See
+[ROADMAP](docs/ROADMAP.md). Treat the gate as a useful hint on capable models,
+not as a control.
+
 Anything the engine will not decide lands in the review queue, carrying the
 destination it would have used, so approving it later is a replay of a decision
 already made rather than a fresh trip to the model.
