@@ -30,4 +30,4 @@ _(none)_
 
 ## Next step
 
-Push the corrected branch (README banner fix) to origin so PR #8 reflects the real change; await maintainer review.
+Awaiting PR review.
