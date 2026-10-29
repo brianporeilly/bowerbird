@@ -13,8 +13,8 @@ The binary is `bower`.
 
 > **Status: pre-1.0, under active development.** The pipeline runs end to end
 > against the built-in offline classifier, with the journal, review queue and
-> recycle store in place. No real LLM backend adapter has shipped yet — see
-> [Roadmap](#roadmap).
+> recycle store in place. The OpenAI-compatible backend adapter has shipped;
+> the Anthropic-compatible adapter is next — see [Roadmap](#roadmap).
 
 ## Why this design
 
