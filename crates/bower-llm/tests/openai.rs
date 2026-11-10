@@ -127,7 +127,7 @@ fn an_empty_batch_never_reaches_the_network() {
     let server = MockServer::new(vec![Reply::assistant("{}")]);
     let response = classify(&adapter(&server), &profile(), &[]).unwrap();
 
-    assert!(response.outcomes.is_empty());
+    assert!(response.outcomes.is_empty(), "an empty batch yields no outcomes");
     assert_eq!(server.request_count(), 0, "there is nothing to ask about");
 }
 

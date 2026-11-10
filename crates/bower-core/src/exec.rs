@@ -471,7 +471,10 @@ mod tests {
         };
         apply(&ResolvedAction::Move { dest }, &src, &context).unwrap();
 
-        assert!(store.unfinished_operations().unwrap().is_empty());
+        assert!(
+            store.unfinished_operations().unwrap().is_empty(),
+            "a dry run records no intent, so nothing can be left unfinished"
+        );
         assert!(store.managed_dirs("downloads").unwrap().is_empty(), "nothing happened to record");
     }
 }

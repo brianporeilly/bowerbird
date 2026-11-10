@@ -328,7 +328,7 @@ fn a_recycled_file_can_be_restored_to_exactly_where_it_was() {
 
     assert_eq!(restored, original);
     assert_eq!(fs::read_to_string(&original).unwrap(), "precious bytes");
-    assert!(store.recycle_list().unwrap().is_empty());
+    assert!(store.recycle_list().unwrap().is_empty(), "nothing is left in the recycle store");
 }
 
 #[test]
@@ -354,7 +354,7 @@ fn purge_is_the_only_thing_that_actually_deletes() {
 
     review::purge(&store, &recycled, &opts(Some(&recycle))).unwrap();
     assert!(!stored.exists(), "purge is the one operation that destroys");
-    assert!(store.recycle_list().unwrap().is_empty());
+    assert!(store.recycle_list().unwrap().is_empty(), "nothing is left in the recycle store");
 }
 
 #[test]
