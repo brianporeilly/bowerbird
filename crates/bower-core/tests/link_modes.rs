@@ -262,7 +262,7 @@ fn a_dry_run_creates_no_link() {
 
     assert!(matches!(out, Executed::WouldMove { via: LinkMode::Symlink, .. }));
     assert!(fs::symlink_metadata(d.as_path()).is_err());
-    assert!(actions(&store).is_empty());
+    assert!(actions(&store).is_empty(), "a dry run journals nothing");
 }
 
 // --- a whole run ---------------------------------------------------------------
@@ -394,7 +394,7 @@ fn approving_a_queued_item_links_it_too() {
     // And it is remembered as linked, so the next run leaves it alone.
     let next =
         run_profile(&p, &Recording::new("Photos", 0.9), &options(Mode::Execute), &store).unwrap();
-    assert!(next.outcomes.is_empty());
+    assert!(next.outcomes.is_empty(), "an approved link is remembered, so the file is skipped");
 }
 
 #[test]
