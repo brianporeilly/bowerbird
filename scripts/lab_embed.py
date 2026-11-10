@@ -13,7 +13,11 @@ the generative columns is like for like.
     python3 scripts/lab_embed.py                      # bare category names
     python3 scripts/lab_embed.py --described          # with one-line descriptions
 
-Needs an OpenAI-compatible /v1/embeddings endpoint (llama.cpp --embedding).
+With hand labels (lab/labels.toml, see lab_score.py) it also sweeps the margin
+gate against ground truth rather than against another model's choices, and
+reports the number that matters: files filed automatically that were wrong.
+
+Needs an OpenAI-compatible /v1/embeddings endpoint (llama.cpp --embeddings).
 """
 
 import argparse
@@ -21,12 +25,14 @@ import json
 import math
 import sqlite3
 import subprocess
+import sys
 import time
 import tomllib
 import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+GATES = (0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.07, 0.10)
 
 # Hypothetical. The config has no per-category description today; these exist
 # to measure whether adding one would be worth a config field.
@@ -80,11 +86,39 @@ def generative_columns(db):
     return cells, sorted(profiles)
 
 
+def score_against_labels(rows, labels_path):
+    """Sweep the margin gate against hand labels.
+
+    A file whose margin clears the gate is "filed automatically"; the rest are
+    held for a human. Filing a wrong answer, or filing a file the taxonomy has
+    no answer for ("?"), is a silent error. Holding is always safe.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from lab_score import UNANSWERABLE, load_labels
+
+    labels = load_labels(labels_path)
+    scored = [(m, cat, labels[name]) for m, name, cat, _, _ in rows if name in labels]
+    traps = sum(1 for _, _, acc in scored if UNANSWERABLE in acc)
+    print(f"  against {Path(labels_path).name}: {len(scored)} labelled files "
+          f"({len(scored) - traps} answerable, {traps} with no right answer)")
+    print(f"    {'margin >=':<10} {'filed':>5} {'right':>5} {'wrong':>5} {'trap':>5} "
+          f"{'SILENT':>6} {'held':>5}")
+    for gate in GATES:
+        filed = [(c, acc) for m, c, acc in scored if m >= gate]
+        right = sum(1 for c, acc in filed if UNANSWERABLE not in acc and c in acc)
+        trap = sum(1 for c, acc in filed if UNANSWERABLE in acc)
+        wrong = len(filed) - right - trap
+        print(f"    {gate:<10.2f} {len(filed):>5} {right:>5} {wrong:>5} {trap:>5} "
+              f"{wrong + trap:>6} {len(scored) - len(filed):>5}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--endpoint", default="http://127.0.0.1:8089/v1")
     ap.add_argument("--lab", default=str(REPO / "lab"))
     ap.add_argument("--described", action="store_true")
+    ap.add_argument("--labels", default=str(REPO / "lab" / "labels.toml"),
+                    help="hand labels to score against (default lab/labels.toml)")
     ap.add_argument("--reference", help="profile to treat as the reference when scoring the margin gate")
     args = ap.parse_args()
 
@@ -149,6 +183,8 @@ def main():
             if kept:
                 print(f"    margin >= {gate:.2f}: files {len(kept):>2}/{len(scored)}, "
                       f"agree {sum(kept)}/{len(kept)}")
+    if Path(args.labels).is_file():
+        score_against_labels(rows, args.labels)
     margins = sorted(r[0] for r in rows)
     print(f"  margin (top1 - top2): min {margins[0]:.3f}, median "
           f"{margins[len(margins) // 2]:.3f}, max {margins[-1]:.3f}")
