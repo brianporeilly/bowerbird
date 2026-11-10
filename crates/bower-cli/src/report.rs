@@ -1,5 +1,6 @@
 //! Human-readable run output.
 
+use bower_config::LinkMode;
 use bower_core::exec::{Executed, Pending};
 use bower_core::run::RunReport;
 use bower_core::scan::SkipReason;
@@ -21,9 +22,17 @@ pub(crate) fn print_run(report: &RunReport, dry_run: bool) {
             (Some(err), _) => println!("  {:<9} {name}\n              {err}", "ERROR"),
             (
                 None,
-                Some(Executed::Moved { to, renamed, .. } | Executed::WouldMove { to, renamed, .. }),
+                Some(
+                    Executed::Moved { to, renamed, via, .. }
+                    | Executed::WouldMove { to, renamed, via, .. },
+                ),
             ) => {
-                let verb = if *renamed { "RENAME" } else { "MOVE" };
+                let verb = match (via, *renamed) {
+                    (LinkMode::Hardlink, _) => "HARDLINK",
+                    (LinkMode::Symlink, _) => "SYMLINK",
+                    (LinkMode::Move, true) => "RENAME",
+                    (LinkMode::Move, false) => "MOVE",
+                };
                 let by = if outcome.origin == Origin::Rule { "  [rule]" } else { "" };
                 println!("  {verb:<9} {name}\n              -> {}{by}", to.display());
             }
@@ -53,6 +62,7 @@ fn print_skips(report: &RunReport) {
     let mut excluded = 0;
     let mut managed = 0;
     let mut symlinks = 0;
+    let mut linked = 0;
     let mut unreadable = Vec::new();
     for s in &report.skipped {
         match &s.reason {
@@ -60,6 +70,7 @@ fn print_skips(report: &RunReport) {
             SkipReason::ExcludedByPattern => excluded += 1,
             SkipReason::ManagedOutput => managed += 1,
             SkipReason::Symlink => symlinks += 1,
+            SkipReason::AlreadyLinked => linked += 1,
             SkipReason::Unreadable(e) => unreadable.push(format!("{}: {e}", s.path.display())),
         }
     }
@@ -75,6 +86,9 @@ fn print_skips(report: &RunReport) {
     }
     if symlinks > 0 {
         parts.push(format!("{symlinks} symlink(s)"));
+    }
+    if linked > 0 {
+        parts.push(format!("{linked} already linked"));
     }
     if !parts.is_empty() {
         println!("  skipped: {}", parts.join(", "));

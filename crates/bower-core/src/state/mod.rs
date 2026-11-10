@@ -55,6 +55,12 @@ pub enum StateError {
 pub enum JournalAction {
     Move,
     MoveAndRename,
+    /// Added a hard link at the destination and left the source in place
+    /// (`link_mode = "hardlink"`).
+    Hardlink,
+    /// Added a symbolic link at the destination pointing at the source, which
+    /// stays in place (`link_mode = "symlink"`).
+    Symlink,
     /// Moved to the holding folder under `review_placement = "quarantine"`.
     Quarantine,
     /// Moved into the recycle store after a human approved a deletion.
@@ -70,6 +76,8 @@ impl JournalAction {
         match self {
             Self::Move => "move",
             Self::MoveAndRename => "move_and_rename",
+            Self::Hardlink => "hardlink",
+            Self::Symlink => "symlink",
             Self::Quarantine => "quarantine",
             Self::Recycle => "recycle",
             Self::Restore => "restore",
@@ -548,6 +556,29 @@ impl Store {
         )?;
         let rows = stmt.query_map(params![profile], |row| row.get::<_, String>(0))?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?.into_iter().map(PathBuf::from).collect())
+    }
+
+    /// Where each source file was last linked to, for one kind of link.
+    ///
+    /// A link mode leaves the source in the inbox, so without this the next run
+    /// would ask the model about it again -- and if the model changed its mind,
+    /// link it somewhere else too. The journal already knows what was linked
+    /// where; this reads it back. Later rows win, so a re-link replaces the
+    /// earlier answer.
+    pub fn linked_sources(
+        &self,
+        profile: &str,
+        action: JournalAction,
+    ) -> Result<std::collections::HashMap<PathBuf, PathBuf>, StateError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source, dest FROM journal
+             WHERE profile = ?1 AND action = ?2 AND phase = 'committed' AND dest IS NOT NULL
+             ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![profile, action.as_str()], |row| {
+            Ok((PathBuf::from(row.get::<_, String>(0)?), PathBuf::from(row.get::<_, String>(1)?)))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?.into_iter().collect())
     }
 
     // -- review queue -------------------------------------------------------

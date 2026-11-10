@@ -20,6 +20,16 @@
 //!
 //! Either way a lost race is reported as [`ExecError::DestinationOccupied`],
 //! for the caller to re-plan, never as a silent replacement.
+//!
+//! # Link modes
+//!
+//! Under `link_mode = "hardlink"` or `"symlink"` the source is left in place
+//! and a link is created at the destination. `link(2)` and `symlink(2)` both
+//! fail with `EEXIST` rather than replacing anything, so the no-overwrite
+//! guarantee is kept for free. A hard link that cannot be made (a different
+//! filesystem) is an error, **not** a copy: someone who asked for links did not
+//! ask for a second copy of every file, and quietly making one would defeat the
+//! point of the mode.
 
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -27,6 +37,7 @@ use std::path::{Path, PathBuf};
 
 use crate::model::{DestPath, NoOpReason, ResolvedAction};
 use crate::state::{Intent, JournalAction, JournalSink, Outcome, Provenance, StateError};
+use bower_config::LinkMode;
 
 /// Whether the executor is allowed to write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,11 +82,15 @@ pub enum Executed {
         from: PathBuf,
         to: PathBuf,
         renamed: bool,
+        /// How the file was placed. Anything but [`LinkMode::Move`] left the
+        /// source where it was.
+        via: LinkMode,
     },
     WouldMove {
         from: PathBuf,
         to: PathBuf,
         renamed: bool,
+        via: LinkMode,
     },
     Nothing {
         reason: NoOpReason,
@@ -125,16 +140,29 @@ pub enum ExecError {
     },
 }
 
-/// Carries out one resolved action.
+/// Carries out one resolved action, moving files.
 pub fn apply(
     action: &ResolvedAction,
     source: &Path,
     ctx: &ExecContext<'_>,
 ) -> Result<Executed, ExecError> {
+    apply_via(action, source, ctx, LinkMode::Move)
+}
+
+/// Carries out one resolved action, placing a filed file the way `via` says.
+///
+/// Only the placement into the organized view honours `via`. A deferred
+/// decision, or anything that is not a move, is unaffected.
+pub fn apply_via(
+    action: &ResolvedAction,
+    source: &Path,
+    ctx: &ExecContext<'_>,
+    via: LinkMode,
+) -> Result<Executed, ExecError> {
     match action {
-        ResolvedAction::Move { dest } => relocate(source, dest, JournalAction::Move, ctx),
+        ResolvedAction::Move { dest } => relocate_via(source, dest, JournalAction::Move, via, ctx),
         ResolvedAction::MoveAndRename { dest } => {
-            relocate(source, dest, JournalAction::MoveAndRename, ctx)
+            relocate_via(source, dest, JournalAction::MoveAndRename, via, ctx)
         }
         ResolvedAction::NoOp { reason } => Ok(Executed::Nothing { reason: reason.clone() }),
         ResolvedAction::Quarantine { reason, .. } => {
@@ -168,6 +196,31 @@ pub fn relocate(
     what: JournalAction,
     ctx: &ExecContext<'_>,
 ) -> Result<Executed, ExecError> {
+    relocate_via(source, dest, what, LinkMode::Move, ctx)
+}
+
+/// As [`relocate`], but a filing operation may leave the source in place and
+/// link to it instead.
+///
+/// `via` applies only when `what` is a filing (`Move` or `MoveAndRename`).
+/// Parking, recycling and restoring are always real moves: those exist to get
+/// a file out of the way, and a link would leave it exactly where it was.
+pub fn relocate_via(
+    source: &Path,
+    dest: &DestPath,
+    what: JournalAction,
+    via: LinkMode,
+    ctx: &ExecContext<'_>,
+) -> Result<Executed, ExecError> {
+    let filing = matches!(what, JournalAction::Move | JournalAction::MoveAndRename);
+    let via = if filing { via } else { LinkMode::Move };
+    // What the journal says happened: a link is not a move, and a reader should
+    // not have to infer from the config of the day which one it was.
+    let recorded = match via {
+        LinkMode::Move => what,
+        LinkMode::Hardlink => JournalAction::Hardlink,
+        LinkMode::Symlink => JournalAction::Symlink,
+    };
     let renamed = what == JournalAction::MoveAndRename
         || source.file_name().is_none_or(|n| n != dest.filename());
 
@@ -179,13 +232,14 @@ pub fn relocate(
             from: source.to_path_buf(),
             to: dest.as_path().to_path_buf(),
             renamed,
+            via,
         });
     }
 
     let parent = dest.parent_dir();
     let intent = Intent {
         profile: ctx.profile,
-        action: what,
+        action: recorded,
         source,
         dest: Some(dest.as_path()),
         dest_dir: Some(&parent),
@@ -196,7 +250,11 @@ pub fn relocate(
 
     let outcome = fs::create_dir_all(&parent)
         .map_err(|e| ExecError::Io { op: "create directory", path: parent.clone(), source: e })
-        .and_then(|()| move_no_clobber(source, dest.as_path()));
+        .and_then(|()| match via {
+            LinkMode::Move => move_no_clobber(source, dest.as_path()),
+            LinkMode::Hardlink => hardlink_no_clobber(source, dest.as_path()),
+            LinkMode::Symlink => symlink_no_clobber(source, dest.as_path()),
+        });
 
     match outcome {
         Ok(()) => {
@@ -205,6 +263,7 @@ pub fn relocate(
                 from: source.to_path_buf(),
                 to: dest.as_path().to_path_buf(),
                 renamed,
+                via,
             })
         }
         Err(e) => {
@@ -232,6 +291,86 @@ pub(crate) fn move_no_clobber(src: &Path, dest: &Path) -> Result<(), ExecError> 
         // copy that still cannot overwrite.
         Err(_) => copy_no_clobber(src, dest),
     }
+}
+
+/// Adds a hard link at `dest` and leaves `src` alone.
+///
+/// Never copies. A different filesystem is reported as such, with the way out.
+pub(crate) fn hardlink_no_clobber(src: &Path, dest: &Path) -> Result<(), ExecError> {
+    match fs::hard_link(src, dest) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+            Err(ExecError::DestinationOccupied { dest: dest.to_path_buf() })
+        }
+        Err(e) if e.kind() == ErrorKind::CrossesDevices => Err(ExecError::Io {
+            op: "hard link across filesystems (link_mode = \"symlink\" can cross them) to",
+            path: dest.to_path_buf(),
+            source: e,
+        }),
+        Err(source) => Err(ExecError::Io { op: "hard link to", path: dest.to_path_buf(), source }),
+    }
+}
+
+/// Adds a symbolic link at `dest` pointing at `src`, and leaves `src` alone.
+///
+/// The target is `src` exactly as given, so it must be absolute: a relative
+/// target would be read from the link's own directory and point nowhere.
+#[cfg(unix)]
+pub(crate) fn symlink_no_clobber(src: &Path, dest: &Path) -> Result<(), ExecError> {
+    if !src.is_absolute() {
+        return Err(ExecError::Io {
+            op: "symlink to a relative source from",
+            path: dest.to_path_buf(),
+            source: io::Error::new(ErrorKind::InvalidInput, "the link target must be absolute"),
+        });
+    }
+    match std::os::unix::fs::symlink(src, dest) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+            Err(ExecError::DestinationOccupied { dest: dest.to_path_buf() })
+        }
+        Err(source) => {
+            Err(ExecError::Io { op: "create a symlink at", path: dest.to_path_buf(), source })
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn symlink_no_clobber(_src: &Path, dest: &Path) -> Result<(), ExecError> {
+    Err(ExecError::Io {
+        op: "create a symlink at",
+        path: dest.to_path_buf(),
+        source: io::Error::new(ErrorKind::Unsupported, "symlink mode needs a unix platform"),
+    })
+}
+
+/// Whether `dest` is still the link an earlier run made to `src`.
+///
+/// Used to recognise a file that has already been filed, so a re-run neither
+/// asks the model again nor reports its own link as a conflicting file.
+#[must_use]
+pub fn is_link_to(dest: &Path, src: &Path, via: LinkMode) -> bool {
+    match via {
+        LinkMode::Move => false,
+        LinkMode::Symlink => fs::read_link(dest).is_ok_and(|target| target == src),
+        LinkMode::Hardlink => same_file(dest, src),
+    }
+}
+
+/// Whether two paths are the same file on disk -- a hard link of each other --
+/// without following a symlink at `a`.
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
+        (Ok(x), Ok(y)) => x.is_file() && y.is_file() && x.dev() == y.dev() && x.ino() == y.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_file(_a: &Path, _b: &Path) -> bool {
+    false
 }
 
 /// Streams `src` into a newly created `dest`, then removes `src`.

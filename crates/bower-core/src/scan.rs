@@ -40,6 +40,10 @@ pub enum SkipReason {
     StillSettling,
     /// Symlinks are never followed or moved.
     Symlink,
+    /// Already linked into its category by an earlier run, and the link is
+    /// still there. Only produced under `link_mode = "hardlink"` or
+    /// `"symlink"`, where the source stays in the inbox.
+    AlreadyLinked,
     Unreadable(String),
 }
 

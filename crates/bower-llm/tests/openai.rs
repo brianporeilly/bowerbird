@@ -12,7 +12,9 @@
 
 mod support;
 
-use bower_config::{Backend, Metadata, OnConflict, Profile, Provider, Rename, StructuredOutput};
+use bower_config::{
+    Backend, LinkMode, Metadata, OnConflict, Profile, Provider, Rename, StructuredOutput,
+};
 use bower_core::llm::{BatchRequest, LlmBackend};
 use bower_core::model::{FileFacts, FileId, FileRecord, Proposal, ProposalOutcome};
 use bower_llm::OpenAiBackend;
@@ -49,6 +51,7 @@ fn profile() -> Profile {
         batch_size: 25,
         confidence_threshold: 0.75,
         on_conflict: OnConflict::Quarantine,
+        link_mode: LinkMode::Move,
         stability_wait: Duration::ZERO,
         exclude_patterns: vec![],
         include_subdirs: false,
