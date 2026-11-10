@@ -42,6 +42,12 @@ impl Fixture {
 
     /// Writes a config with the given confidence threshold.
     fn config(&self, threshold: f32) -> std::path::PathBuf {
+        self.config_with(threshold, "")
+    }
+
+    /// As [`Fixture::config`], with `extra` appended to the profile -- where
+    /// `[[profiles.rules]]` tables go.
+    fn config_with(&self, threshold: f32, extra: &str) -> std::path::PathBuf {
         let root = self.root().display();
         let text = format!(
             r#"
@@ -70,6 +76,7 @@ confidence_threshold = {threshold}
 on_conflict = "quarantine"
 exclude_patterns = ["*.part"]
 include_subdirs = true
+{extra}
 "#
         );
         let path = self.root().join("bowerbird.toml");
@@ -595,4 +602,58 @@ fn the_generated_config_does_not_hide_files_a_first_run_just_created() {
         .arg("--stub-llm")
         .assert()
         .stdout(contains("scanned 1 file"));
+}
+
+#[test]
+fn a_rule_files_its_match_even_when_nothing_a_model_says_would_clear_the_gate() {
+    let f = Fixture::new();
+    let config = f.config_with(
+        1.0,
+        r#"
+[[profiles.rules]]
+name = "pictures"
+category = "Pictures"
+extensions = ["png"]
+"#,
+    );
+
+    // A threshold of 1.0 sends every model proposal to review; the rule's match
+    // is not a guess, so it is not subject to the gate.
+    Command::cargo_bin("bower")
+        .unwrap()
+        .arg("--config")
+        .arg(&config)
+        .args(["run", "--profile", "downloads", "--stub-llm", "--execute"])
+        .assert()
+        .code(ATTENTION)
+        .stdout(contains("1 file(s) by rule, no model consulted"))
+        .stdout(contains("[rule]"));
+
+    assert!(f.root().join("downloads/Pictures/holiday.png").exists());
+    assert!(
+        f.root().join("downloads/acme-invoice.pdf").exists(),
+        "the file no rule claimed is still the model's, and still waits for a human"
+    );
+}
+
+#[test]
+fn a_rule_with_a_bad_category_stops_the_run_before_anything_moves() {
+    let f = Fixture::new();
+    let strict = f.config_with(0.0, "").with_file_name("strict.toml");
+    let text = fs::read_to_string(f.root().join("bowerbird.toml"))
+        .unwrap()
+        .replace("allow_dynamic_categories = true", "allow_dynamic_categories = false")
+        + "\n[[profiles.rules]]\nname = \"x\"\ncategory = \"Nowhere\"\nextensions = [\"png\"]\n";
+    fs::write(&strict, text).unwrap();
+
+    Command::cargo_bin("bower")
+        .unwrap()
+        .arg("--config")
+        .arg(&strict)
+        .args(["run", "--profile", "downloads", "--stub-llm", "--execute"])
+        .assert()
+        .code(ERROR)
+        .stderr(contains("is not one of this profile's categories"));
+
+    assert!(f.root().join("downloads/holiday.png").exists());
 }

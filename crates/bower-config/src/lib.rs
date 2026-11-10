@@ -190,6 +190,35 @@ pub struct Profile {
     pub include_subdirs: bool,
     pub rename: Rename,
     pub metadata: Metadata,
+    /// User-defined fast-path rules, in the order they were written. The first
+    /// match wins and the model is never consulted for that file. Empty by
+    /// default: nothing is built in.
+    pub rules: Vec<Rule>,
+}
+
+/// A deterministic rule that files a matching file without asking a model.
+///
+/// There are no built-in rules. Every one exists because the profile's owner
+/// wrote it, which is what makes it acceptable to act on without a confidence
+/// gate: the person has already made the decision the gate would approximate.
+///
+/// A rule matches when **all** of its criteria do. At least one criterion is
+/// required, so a rule can never match everything by omission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rule {
+    /// Appears in the journal and the review queue as the reason for a decision.
+    pub name: String,
+    /// Already checked against the profile's declared categories (or
+    /// `allow_dynamic_categories`) and as a safe directory name.
+    pub category: String,
+    /// Lowercase, no leading dot. Any one of them matching satisfies this
+    /// criterion. Empty means the criterion is not used.
+    pub extensions: Vec<String>,
+    /// A glob matched case-insensitively against the file's name, not its path.
+    pub name_glob: Option<String>,
+    /// An exact MIME type, or `type/*` for a whole family. Needs
+    /// `metadata.detect_mime = true`, which validation enforces.
+    pub mime: Option<String>,
 }
 
 impl Profile {
@@ -283,6 +312,108 @@ pub fn is_safe_profile_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Checks a profile's `[[profiles.rules]]` and normalizes them.
+///
+/// Every failure here is a config error rather than a runtime surprise: a rule
+/// acts without a model or a confidence gate, so one that cannot do what it
+/// says should stop the run before anything moves.
+fn validate_rules(
+    at: &str,
+    raw: Vec<raw::RawRule>,
+    categories: &[String],
+    allow_dynamic: bool,
+    detect_mime: bool,
+    problems: &mut Vec<Problem>,
+) -> Vec<Rule> {
+    let mut rules = Vec::with_capacity(raw.len());
+    let mut seen = BTreeSet::new();
+
+    for (i, r) in raw.into_iter().enumerate() {
+        let rat = format!("{at}.rules[{i}]");
+
+        if r.name.trim().is_empty() {
+            problems.push(Problem::new(format!("{rat}.name"), "must not be empty"));
+        } else if !seen.insert(r.name.clone()) {
+            problems.push(Problem::new(
+                format!("{rat}.name"),
+                format!("duplicate rule name `{}`", r.name),
+            ));
+        }
+
+        if !is_safe_component(&r.category) {
+            problems.push(Problem::new(
+                format!("{rat}.category"),
+                format!("`{}` is not usable as a single directory name", r.category),
+            ));
+        } else if !allow_dynamic && !categories.iter().any(|c| c.eq_ignore_ascii_case(&r.category))
+        {
+            problems.push(Problem::new(
+                format!("{rat}.category"),
+                format!(
+                    "`{}` is not one of this profile's categories, and \
+                     allow_dynamic_categories = false",
+                    r.category
+                ),
+            ));
+        }
+
+        let mut extensions = Vec::with_capacity(r.extensions.len());
+        for (ei, e) in r.extensions.iter().enumerate() {
+            let bare = e.trim().trim_start_matches('.').to_ascii_lowercase();
+            if bare.is_empty() || bare.contains(['/', '\\', '*', '?']) || bare.contains('.') {
+                problems.push(Problem::new(
+                    format!("{rat}.extensions[{ei}]"),
+                    format!(
+                        "`{e}` is not a plain extension; write `zip`, not `*.zip`, and \
+                         use name_glob for anything more specific"
+                    ),
+                ));
+            } else {
+                extensions.push(bare);
+            }
+        }
+
+        if let Some(g) = &r.name_glob
+            && let Err(e) = globset::Glob::new(g)
+        {
+            problems.push(Problem::new(format!("{rat}.name_glob"), format!("`{g}`: {e}")));
+        }
+
+        if let Some(m) = &r.mime {
+            let shaped = m.split_once('/').is_some_and(|(t, s)| !t.is_empty() && !s.is_empty());
+            if !shaped {
+                problems.push(Problem::new(
+                    format!("{rat}.mime"),
+                    format!("`{m}` must look like `application/pdf` or `image/*`"),
+                ));
+            }
+            if !detect_mime {
+                problems.push(Problem::new(
+                    format!("{rat}.mime"),
+                    "needs metadata.detect_mime = true, or it could never match",
+                ));
+            }
+        }
+
+        if r.extensions.is_empty() && r.name_glob.is_none() && r.mime.is_none() {
+            problems.push(Problem::new(
+                rat.clone(),
+                "needs at least one of extensions, name_glob or mime; a rule with no \
+                 criteria would match every file",
+            ));
+        }
+
+        rules.push(Rule {
+            name: r.name,
+            category: r.category,
+            extensions,
+            name_glob: r.name_glob,
+            mime: r.mime,
+        });
+    }
+    rules
 }
 
 #[allow(clippy::too_many_lines)]
@@ -432,6 +563,15 @@ fn validate(raw: raw::RawConfig) -> Result<Config, ConfigError> {
             needs_recycle_dir = true;
         }
 
+        let rules = validate_rules(
+            &at,
+            p.rules,
+            &p.categories,
+            p.allow_dynamic_categories,
+            p.metadata.detect_mime,
+            &mut problems,
+        );
+
         let destination_root = p.destination_root.unwrap_or_else(|| p.path.clone());
         profiles.push(Profile {
             name: p.name,
@@ -457,6 +597,7 @@ fn validate(raw: raw::RawConfig) -> Result<Config, ConfigError> {
                 extract_pdf_metadata: p.metadata.extract_pdf_metadata,
                 content_sniff_bytes: p.metadata.content_sniff_bytes,
             },
+            rules,
         });
     }
 

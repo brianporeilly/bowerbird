@@ -3,6 +3,7 @@
 use bower_core::exec::{Executed, Pending};
 use bower_core::run::RunReport;
 use bower_core::scan::SkipReason;
+use bower_core::state::Origin;
 
 /// Prints one profile's run.
 pub(crate) fn print_run(report: &RunReport, dry_run: bool) {
@@ -23,7 +24,8 @@ pub(crate) fn print_run(report: &RunReport, dry_run: bool) {
                 Some(Executed::Moved { to, renamed, .. } | Executed::WouldMove { to, renamed, .. }),
             ) => {
                 let verb = if *renamed { "RENAME" } else { "MOVE" };
-                println!("  {verb:<9} {name}\n              -> {}", to.display());
+                let by = if outcome.origin == Origin::Rule { "  [rule]" } else { "" };
+                println!("  {verb:<9} {name}\n              -> {}{by}", to.display());
             }
             (None, Some(Executed::Nothing { reason })) => {
                 println!("  {:<9} {name}\n              {reason}", "SKIP");
@@ -89,6 +91,10 @@ fn print_summary(report: &RunReport, dry_run: bool) {
     let errors = report.errors();
 
     print!("  summary: {verb} {moved}");
+    let by_rule = report.by_rule();
+    if by_rule > 0 {
+        print!(" ({by_rule} file(s) by rule, no model consulted)");
+    }
     if attention > 0 {
         print!(", {attention} awaiting a human");
     }

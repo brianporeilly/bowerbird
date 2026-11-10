@@ -88,6 +88,7 @@ impl Fixture {
             exclude_patterns: vec![],
             include_subdirs: false,
             rename: Rename::Disabled,
+            rules: vec![],
             // Content sniffing on: this is what puts the hostile bytes into
             // the prompt in the first place.
             metadata: Metadata {

@@ -14,7 +14,7 @@ use bower_core::state::{
 use std::path::Path;
 
 /// The schema version this build writes. Bump deliberately, with the migration.
-const CURRENT_SCHEMA: u32 = 2;
+const CURRENT_SCHEMA: u32 = 3;
 
 fn store() -> Store {
     Store::open_in_memory().unwrap()
@@ -207,6 +207,7 @@ fn new_item<'a>(
         reasoning: "because",
         confidence: Some(0.5),
         reason: "below threshold",
+        origin: Origin::Model,
     }
 }
 
@@ -454,6 +455,44 @@ fn a_v1_file_migrates_without_losing_its_journal() {
     let rows = store.journal_recent(None, 10).unwrap();
     assert_eq!(rows.len(), 1, "the v1 row must survive the migration");
     assert_eq!(rows[0].op_id, "op-from-v1");
+}
+
+#[test]
+fn queued_items_predating_origin_are_model_proposals_because_nothing_else_could_queue() {
+    // Unlike the journal, this backfill is a fact and not a guess: before the
+    // rule engine existed, a model was the only thing that could put a row in
+    // the queue. The test exists so that stops being true loudly if it ever does.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    write_v1_store(&path);
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO review_queue (created_at, profile, kind, path, original_path, file_hash)
+             VALUES (1, 'downloads', 'review', '/a.pdf', '/a.pdf', 'h')",
+            [],
+        )
+        .unwrap();
+    }
+
+    let store = Store::open(&path).unwrap();
+    let item = store.review_list(None, None).unwrap().pop().unwrap();
+    assert_eq!(item.origin, Origin::Model);
+}
+
+#[test]
+fn a_queued_items_origin_round_trips() {
+    let s = store();
+    let path = Path::new("/data/downloads/a.nzb");
+    let id = s
+        .enqueue_review(&NewReviewItem {
+            origin: Origin::Rule,
+            confidence: None,
+            ..new_item("downloads", ReviewKind::Review, path, "hash-rule")
+        })
+        .unwrap()
+        .expect("a new row");
+    assert_eq!(s.review_get(id).unwrap().unwrap().origin, Origin::Rule);
 }
 
 #[test]

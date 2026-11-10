@@ -120,6 +120,19 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE journal ADD COLUMN confidence REAL;
     CREATE INDEX journal_origin ON journal (profile, origin);
     ",
+    // v3: who proposed a queued item.
+    //
+    // Once a rule can queue something -- a remembered rejection, or a missing
+    // filename token -- approving it from the queue would otherwise be journalled
+    // as a model decision, because the queue forgot where the proposal came from.
+    //
+    // Unlike the journal's v2 columns, existing rows can be filled in honestly:
+    // before this migration nothing but a model could put a row in the queue, so
+    // 'model' is a fact about them, not a guess.
+    r"
+    ALTER TABLE review_queue ADD COLUMN origin TEXT NOT NULL DEFAULT 'model'
+        CHECK (origin IN ('model','rule'));
+    ",
 ];
 
 /// The schema version this build writes.

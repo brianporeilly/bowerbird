@@ -16,10 +16,11 @@ use crate::hash;
 use crate::llm::{BatchRequest, BatchResponse, LlmBackend, LlmError};
 use crate::model::{DestPath, FileFacts, FileRecord, ResolvedAction};
 use crate::policy::{self, Decision, Occupancy, PlanInput, PriorRejections};
+use crate::rules::{self, RuleError, RuleSet};
 use crate::scan::{self, ScanError, ScanOptions, Skipped};
 use crate::state::{
-    JournalAction, JournalSink, NewReviewItem, NoJournal, Provenance, RejectionIndex, ReviewKind,
-    StateError, Store,
+    JournalAction, JournalSink, NewReviewItem, NoJournal, Origin, Provenance, RejectionIndex,
+    ReviewKind, StateError, Store,
 };
 
 /// Guards against a pathological `on_conflict = "suffix"` loop. The policy
@@ -37,6 +38,8 @@ pub enum RunError {
     Llm(#[from] LlmError),
     #[error(transparent)]
     State(#[from] StateError),
+    #[error(transparent)]
+    Rule(#[from] RuleError),
     #[error("review_placement = \"quarantine\" needs general.quarantine_dir to be set")]
     NoQuarantineDir,
 }
@@ -45,6 +48,9 @@ pub enum RunError {
 #[derive(Debug, Clone)]
 pub struct FileOutcome {
     pub file: FileRecord,
+    /// What proposed this file's placement: a model, or one of the profile's
+    /// own rules.
+    pub origin: Origin,
     pub action: ResolvedAction,
     /// `None` when execution failed; see [`FileOutcome::error`].
     pub executed: Option<Executed>,
@@ -77,6 +83,12 @@ impl RunReport {
             .iter()
             .filter(|o| matches!(o.executed, Some(Executed::WouldMove { .. })))
             .count()
+    }
+
+    /// Files a rule decided, without consulting a model.
+    #[must_use]
+    pub fn by_rule(&self) -> usize {
+        self.outcomes.iter().filter(|o| o.origin == Origin::Rule).count()
     }
 
     /// Whether anything is waiting on a human, which drives exit code 2.
@@ -159,15 +171,42 @@ pub fn run_profile(
         ..Default::default()
     };
 
-    for batch in scanned.files.chunks(profile.batch_size) {
-        // The context builder runs here, not inside the backend: what the model
-        // may see is a policy decision and stays on this side of the port.
-        let ctx = crate::context::build(BatchRequest { profile, files: batch });
-        let response = backend.classify(&ctx)?;
-        for file in batch {
+    // Rules first. A file one of them claims never reaches the model, which is
+    // the point: it is cheaper, and for anything a person can state outright it
+    // is also more reliable. The rest are batched to the model as before, so a
+    // profile with no rules behaves exactly as it did.
+    let ruleset = RuleSet::compile(&profile.rules)?;
+    let mut unruled: Vec<&FileRecord> = Vec::new();
+    for file in &scanned.files {
+        if let Some(rule) = ruleset.first_match(file) {
+            let mut outcomes = std::collections::BTreeMap::new();
+            outcomes.insert(file.id.clone(), rules::proposal(rule, file));
+            let response = BatchResponse { outcomes };
             report.outcomes.push(handle_file(
                 file,
                 &response,
+                Origin::Rule,
+                profile,
+                options,
+                store,
+                &rejections,
+            ));
+        } else {
+            unruled.push(file);
+        }
+    }
+
+    for batch in unruled.chunks(profile.batch_size) {
+        // The context builder runs here, not inside the backend: what the model
+        // may see is a policy decision and stays on this side of the port.
+        let files: Vec<FileRecord> = batch.iter().map(|f| (*f).clone()).collect();
+        let ctx = crate::context::build(BatchRequest { profile, files: &files });
+        let response = backend.classify(&ctx)?;
+        for file in &files {
+            report.outcomes.push(handle_file(
+                file,
+                &response,
+                Origin::Model,
                 profile,
                 options,
                 store,
@@ -186,6 +225,7 @@ fn context<'a>(
     options: &RunOptions,
     store: &'a Store,
     file_hash: Option<&'a str>,
+    origin: Origin,
     confidence: Option<f32>,
 ) -> ExecContext<'a> {
     const DISCARD: NoJournal = NoJournal;
@@ -195,10 +235,14 @@ fn context<'a>(
         mode: options.mode,
         file_hash,
         journal,
-        // Anything reaching the executor from a run cleared the confidence gate
-        // on its own; a queued item that a person approved is journalled from
-        // `review`, which records `model_approved` instead.
-        provenance: Provenance::model_auto(confidence),
+        // Anything reaching the executor from a run was allowed on its own: a
+        // model proposal that cleared the confidence gate, or a rule the
+        // profile's owner wrote. A queued item that a person approved is
+        // journalled from `review`, which records `Provenance::approved`.
+        provenance: match origin {
+            Origin::Rule => Provenance::rule_auto(),
+            _ => Provenance::model_auto(confidence),
+        },
     }
 }
 
@@ -229,6 +273,7 @@ impl<'a> LazyHash<'a> {
 fn handle_file(
     file: &FileRecord,
     response: &BatchResponse,
+    origin: Origin,
     profile: &Profile,
     options: &RunOptions,
     store: &Store,
@@ -253,13 +298,14 @@ fn handle_file(
         }
     };
 
-    decide_and_execute(file, response, profile, options, store, prior, &mut hasher)
+    decide_and_execute(file, response, origin, profile, options, store, prior, &mut hasher)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn decide_and_execute(
     file: &FileRecord,
     response: &BatchResponse,
+    origin: Origin,
     profile: &Profile,
     options: &RunOptions,
     store: &Store,
@@ -302,6 +348,7 @@ fn decide_and_execute(
                     Err(e) => {
                         return failed(
                             file,
+                            origin,
                             ResolvedAction::Quarantine {
                                 reason: format!("could not inspect the destination: {e}"),
                                 proposed: None,
@@ -318,28 +365,31 @@ fn decide_and_execute(
     // Owned rather than borrowed from `hasher`, which `defer` still needs
     // mutably in order to hash a file nothing has read yet.
     let known_hash = hasher.peek().map(str::to_owned);
-    let ctx = context(profile, options, store, known_hash.as_deref(), confidence);
+    let ctx = context(profile, options, store, known_hash.as_deref(), origin, confidence);
 
     match exec::apply(&action, &file.path, &ctx) {
         Ok(Executed::Deferred(pending)) => {
-            defer(file, action, &pending, profile, options, store, hasher)
+            defer(file, origin, action, &pending, profile, options, store, hasher)
         }
         Ok(executed) => FileOutcome {
             file: file.clone(),
+            origin,
             action,
             executed: Some(executed),
             queued_id: None,
             parked_at: None,
             error: None,
         },
-        Err(e) => failed(file, action, describe(&e)),
+        Err(e) => failed(file, origin, action, describe(&e)),
     }
 }
 
 /// Records a decision the executor will not make on its own, optionally moving
 /// the file to a holding folder first.
+#[allow(clippy::too_many_arguments)]
 fn defer(
     file: &FileRecord,
+    origin: Origin,
     action: ResolvedAction,
     pending: &Pending,
     profile: &Profile,
@@ -354,10 +404,14 @@ fn defer(
             (ReviewKind::Recycle, reason.clone(), Some(*confidence))
         }
     };
+    // A rule's `1.0` is how the policy engine is made to treat it as certain,
+    // not something anyone measured. Storing it would put a fabricated
+    // confidence in the queue, and from there into the journal on approval.
+    let confidence = if origin == Origin::Rule { None } else { confidence };
 
     let digest = match hasher.get() {
         Ok(d) => d.to_owned(),
-        Err(e) => return failed(file, action, format!("could not hash the file: {e}")),
+        Err(e) => return failed(file, origin, action, format!("could not hash the file: {e}")),
     };
 
     // `review_placement = "quarantine"` physically moves pending items so they
@@ -365,15 +419,15 @@ fn defer(
     // nothing.
     // Parking is performed by the run itself, so it is an automatic operation
     // even though the decision it parks is still pending.
-    let ctx = context(profile, options, store, Some(&digest), confidence);
+    let ctx = context(profile, options, store, Some(&digest), origin, confidence);
     let mut parked_at = None;
     if options.review_placement == ReviewPlacement::Quarantine && options.mode == Mode::Execute {
         let Some(root) = options.quarantine_dir.as_deref() else {
-            return failed(file, action, "quarantine_dir is not configured".to_owned());
+            return failed(file, origin, action, "quarantine_dir is not configured".to_owned());
         };
         match park(&file.path, root, &profile.name, file.file_name(), &ctx) {
             Ok(dest) => parked_at = Some(dest),
-            Err(e) => return failed(file, action, e),
+            Err(e) => return failed(file, origin, action, e),
         }
     }
 
@@ -392,18 +446,20 @@ fn defer(
         reasoning: reasoning_of(&action),
         confidence,
         reason: &reason,
+        origin,
     });
 
     match queued {
         Ok(queued_id) => FileOutcome {
             file: file.clone(),
+            origin,
             action,
             executed: Some(Executed::Deferred(pending.clone())),
             queued_id,
             parked_at,
             error: None,
         },
-        Err(e) => failed(file, action, e.to_string()),
+        Err(e) => failed(file, origin, action, e.to_string()),
     }
 }
 
@@ -454,9 +510,15 @@ fn reasoning_of(action: &ResolvedAction) -> &str {
     }
 }
 
-fn failed(file: &FileRecord, action: ResolvedAction, error: impl Into<String>) -> FileOutcome {
+fn failed(
+    file: &FileRecord,
+    origin: Origin,
+    action: ResolvedAction,
+    error: impl Into<String>,
+) -> FileOutcome {
     FileOutcome {
         file: file.clone(),
+        origin,
         action,
         executed: None,
         queued_id: None,
