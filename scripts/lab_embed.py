@@ -116,6 +116,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--endpoint", default="http://127.0.0.1:8089/v1")
     ap.add_argument("--lab", default=str(REPO / "lab"))
+    ap.add_argument("--corpus", help="directory of files to classify (default <lab>/corpus)")
     ap.add_argument("--described", action="store_true")
     ap.add_argument("--labels", default=str(REPO / "lab" / "labels.toml"),
                     help="hand labels to score against (default lab/labels.toml)")
@@ -125,7 +126,8 @@ def main():
     lab = Path(args.lab)
     config = tomllib.loads((lab / "lab.toml").read_text())
     categories = config["profiles"][0]["categories"]
-    files = sorted(p for p in (lab / "corpus").iterdir() if p.is_file())
+    corpus = Path(args.corpus) if args.corpus else lab / "corpus"
+    files = sorted(p for p in corpus.iterdir() if p.is_file())
 
     # EmbeddingGemma's documented prompt for classification.
     prefix = "task: classification | query: "
