@@ -16,7 +16,7 @@
 //! The policy engine is pure, so this can be hammered with adversarial input at
 //! unit-test speed and with no filesystem in the loop.
 
-use bower_config::{Metadata, OnConflict, Profile, Rename};
+use bower_config::{LinkMode, Metadata, OnConflict, Profile, Rename};
 use bower_core::model::{
     FileFacts, FileId, FileRecord, Proposal, ProposalOutcome, RawProposal, ResolvedAction,
 };
@@ -83,6 +83,7 @@ fn profile(rename: Rename, dynamic: bool, on_conflict: OnConflict) -> Profile {
         batch_size: 25,
         confidence_threshold: 0.75,
         on_conflict,
+        link_mode: LinkMode::Move,
         stability_wait: Duration::ZERO,
         exclude_patterns: vec![],
         include_subdirs: false,

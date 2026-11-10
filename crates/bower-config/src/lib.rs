@@ -133,6 +133,36 @@ pub enum ReviewPlacement {
     Quarantine,
 }
 
+/// How a file is put into its category directory.
+///
+/// Only the placement into the organized view is affected. Parking a file for
+/// review, recycling and restoring are always moves.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkMode {
+    /// Move the file out of the inbox. The default, and the only mode that
+    /// leaves the source directory emptier than it found it.
+    #[default]
+    Move,
+    /// Add a hard link at the destination and leave the source where it is.
+    /// Both names are the same file, so it costs no space and survives either
+    /// being renamed. Needs the destination on the same filesystem as the
+    /// source: unlike a move, this never falls back to copying.
+    Hardlink,
+    /// Add a symbolic link at the destination pointing at the source, which
+    /// stays where it is. Works across filesystems; the link dangles if the
+    /// source is moved or deleted.
+    Symlink,
+}
+
+impl LinkMode {
+    /// Whether the source is left in place.
+    #[must_use]
+    pub fn keeps_source(self) -> bool {
+        self != Self::Move
+    }
+}
+
 /// Renaming is either off, or on *with* a template. "Enabled but no template"
 /// is not representable.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +213,8 @@ pub struct Profile {
     pub batch_size: usize,
     pub confidence_threshold: f32,
     pub on_conflict: OnConflict,
+    /// How a file is placed into its category directory. See [`LinkMode`].
+    pub link_mode: LinkMode,
     /// How long a file must have been untouched before it is considered
     /// settled enough to act on.
     pub stability_wait: Duration,
@@ -586,6 +618,7 @@ fn validate(raw: raw::RawConfig) -> Result<Config, ConfigError> {
             batch_size,
             confidence_threshold,
             on_conflict: p.on_conflict,
+            link_mode: p.link_mode,
             stability_wait: Duration::from_secs(p.stability_wait_minutes * 60),
             exclude_patterns: p.exclude_patterns,
             include_subdirs: p.include_subdirs,

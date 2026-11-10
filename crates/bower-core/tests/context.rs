@@ -11,7 +11,7 @@
 //! are the user's statement about what a model is allowed to see, and honouring
 //! them is a correctness property, not a presentation detail.
 
-use bower_config::{Metadata, OnConflict, Profile, Rename};
+use bower_config::{LinkMode, Metadata, OnConflict, Profile, Rename};
 use bower_core::context::{self, BatchContext};
 use bower_core::llm::BatchRequest;
 use bower_core::model::{FileFacts, FileId, FileRecord};
@@ -34,6 +34,7 @@ fn profile() -> Profile {
         batch_size: 25,
         confidence_threshold: 0.75,
         on_conflict: OnConflict::Quarantine,
+        link_mode: LinkMode::Move,
         stability_wait: Duration::ZERO,
         exclude_patterns: vec![],
         include_subdirs: false,

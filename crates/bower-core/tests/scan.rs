@@ -7,7 +7,7 @@
 )]
 //! Scanner behaviour, against real temporary directories.
 
-use bower_config::{Metadata, OnConflict, Profile, Rename};
+use bower_config::{LinkMode, Metadata, OnConflict, Profile, Rename};
 use bower_core::scan::{ScanOptions, ScanReport, SkipReason, scan};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,6 +27,7 @@ fn profile(path: &Path) -> Profile {
         batch_size: 25,
         confidence_threshold: 0.75,
         on_conflict: OnConflict::Quarantine,
+        link_mode: LinkMode::Move,
         stability_wait: Duration::ZERO,
         exclude_patterns: vec![],
         include_subdirs: false,

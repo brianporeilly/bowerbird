@@ -123,6 +123,12 @@ confidence_threshold = 0.7
 # skip | suffix | quarantine. Bowerbird never overwrites, whichever you pick.
 on_conflict = "quarantine"
 
+# move (default) | hardlink | symlink. The last two leave the source in the inbox
+# and put a link in the category directory: an organized view beside an
+# untouched original. hardlink needs the same filesystem and never copies;
+# symlink can cross filesystems but dangles if the source is moved.
+link_mode = "move"
+
 # Ignore anything modified in the last 15 minutes; a file still downloading is
 # not a file worth classifying. Note that this also means a file you just
 # created will be reported as "still settling" -- set it to 0 while trying

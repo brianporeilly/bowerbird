@@ -15,7 +15,7 @@
 //! not as it stood when the row was written. A category since removed from a
 //! profile is not filed into just because a row remembers it.
 
-use bower_config::Profile;
+use bower_config::{LinkMode, Profile};
 use std::path::{Path, PathBuf};
 
 use crate::exec::{self, ExecContext, ExecError, Mode};
@@ -170,7 +170,7 @@ fn approve_move(
         Some(&item.file_hash),
         Provenance::approved(item.origin, item.confidence),
     );
-    let placed = place(&item.path, &base, JournalAction::Move, &ctx)?;
+    let placed = place(&item.path, &base, JournalAction::Move, profile.link_mode, &ctx)?;
 
     if options.mode == Mode::DryRun {
         return Ok(Approved::WouldFile { to: placed });
@@ -207,7 +207,7 @@ fn approve_recycle(
         Some(&item.file_hash),
         Provenance::approved(item.origin, item.confidence),
     );
-    let stored = place(&item.path, &base, JournalAction::Recycle, &ctx)?;
+    let stored = place(&item.path, &base, JournalAction::Recycle, LinkMode::Move, &ctx)?;
 
     if options.mode == Mode::DryRun {
         return Ok(Approved::WouldRecycle { to: stored });
@@ -305,6 +305,7 @@ fn place(
     source: &Path,
     base: &DestPath,
     what: JournalAction,
+    via: LinkMode,
     ctx: &ExecContext<'_>,
 ) -> Result<PathBuf, ResolveError> {
     for attempt in 0..=MAX_ATTEMPTS {
@@ -319,7 +320,7 @@ fn place(
                 })
             })?
         };
-        match exec::relocate(source, &candidate, what, ctx) {
+        match exec::relocate_via(source, &candidate, what, via, ctx) {
             Ok(_) => return Ok(candidate.as_path().to_path_buf()),
             // Occupied; try the next name.
             Err(ExecError::DestinationOccupied { .. }) => {}

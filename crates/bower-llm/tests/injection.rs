@@ -17,7 +17,8 @@
 mod support;
 
 use bower_config::{
-    Backend, Metadata, OnConflict, Profile, Provider, Rename, ReviewPlacement, StructuredOutput,
+    Backend, LinkMode, Metadata, OnConflict, Profile, Provider, Rename, ReviewPlacement,
+    StructuredOutput,
 };
 use bower_core::exec::Mode;
 use bower_core::model::{FileId, ResolvedAction};
@@ -84,6 +85,7 @@ impl Fixture {
             batch_size: 25,
             confidence_threshold: 0.75,
             on_conflict: OnConflict::Quarantine,
+            link_mode: LinkMode::Move,
             stability_wait: Duration::ZERO,
             exclude_patterns: vec![],
             include_subdirs: false,

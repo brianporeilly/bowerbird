@@ -657,3 +657,27 @@ fn a_rule_with_a_bad_category_stops_the_run_before_anything_moves() {
 
     assert!(f.root().join("downloads/holiday.png").exists());
 }
+
+#[test]
+fn a_symlink_run_says_so_leaves_the_source_and_is_quiet_the_second_time() {
+    let f = Fixture::new();
+    let config = f.config_with(0.0, "link_mode = \"symlink\"");
+    let run = || {
+        let mut cmd = Command::cargo_bin("bower").unwrap();
+        cmd.arg("--config").arg(&config).args([
+            "run",
+            "--profile",
+            "downloads",
+            "--stub-llm",
+            "--execute",
+        ]);
+        cmd
+    };
+
+    run().assert().code(OK).stdout(contains("SYMLINK"));
+    assert!(f.root().join("downloads/acme-invoice.pdf").exists(), "the source stays");
+    let link = f.root().join("downloads/Documents/acme-invoice.pdf");
+    assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+
+    run().assert().code(OK).stdout(contains("already linked")).stdout(contains("nothing to do"));
+}
