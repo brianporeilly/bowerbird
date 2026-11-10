@@ -340,7 +340,10 @@ fn a_dry_run_writes_neither_files_nor_journal_nor_queue() {
     assert!(dir.path().join("a.pdf").exists());
     assert!(!dir.path().join("Documents").exists());
     assert!(store.managed_dirs("downloads").unwrap().is_empty(), "nothing was executed to record");
-    assert!(store.unfinished_operations().unwrap().is_empty());
+    assert!(
+        store.unfinished_operations().unwrap().is_empty(),
+        "a dry run records no intent, so nothing can be left unfinished"
+    );
 }
 
 #[test]

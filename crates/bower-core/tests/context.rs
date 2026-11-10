@@ -209,5 +209,5 @@ fn every_file_in_the_batch_appears_exactly_once_and_keeps_its_id() {
 #[test]
 fn an_empty_batch_produces_an_empty_file_list_not_a_panic() {
     let ctx = build(&profile(), &[]);
-    assert!(ctx.files.is_empty());
+    assert!(ctx.files.is_empty(), "an empty batch discloses no files");
 }

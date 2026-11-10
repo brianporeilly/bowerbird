@@ -173,7 +173,7 @@ fn a_file_still_being_written_is_left_to_settle() {
     p.stability_wait = Duration::from_secs(3600);
 
     let report = scan(&p, &ScanOptions::default()).unwrap();
-    assert!(report.files.is_empty());
+    assert!(report.files.is_empty(), "nothing in this tree is eligible to be scanned");
     assert_eq!(skipped_for(&report, &SkipReason::StillSettling).len(), 1);
 }
 

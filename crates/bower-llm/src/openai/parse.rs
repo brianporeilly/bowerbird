@@ -320,6 +320,6 @@ mod tests {
         );
         let parsed = parse_reply(&reply, &expected).unwrap();
         assert!(!parsed.needs_reformat(&expected));
-        assert!(parsed.unresolved(&expected).is_empty());
+        assert!(parsed.unresolved(&expected).is_empty(), "every expected file got an entry");
     }
 }

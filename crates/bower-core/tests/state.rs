@@ -135,7 +135,10 @@ fn a_failed_operation_is_finished_but_not_committed() {
     let op = s.record_intent(&i).unwrap();
     s.record_result(&op, &i, &Outcome::Failed { detail: "occupied".to_owned() }).unwrap();
 
-    assert!(s.unfinished_operations().unwrap().is_empty());
+    assert!(
+        s.unfinished_operations().unwrap().is_empty(),
+        "an intent with a recorded result is not unfinished"
+    );
     assert!(
         s.managed_dirs("downloads").unwrap().is_empty(),
         "a directory only counts as managed once something actually landed in it"
@@ -334,7 +337,7 @@ fn a_deletion_rejection_carries_no_category_and_stays_distinct() {
 fn an_empty_index_lets_a_run_skip_hashing_altogether() {
     let s = store();
     let index = s.rejections_for("downloads").unwrap();
-    assert!(index.is_empty());
+    assert!(index.is_empty(), "no rejections were recorded for this profile");
     assert!(!index.might_match_size(4096));
 }
 
