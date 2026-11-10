@@ -271,3 +271,137 @@ fn the_shipped_example_config_is_valid() {
     assert_eq!(config.profiles.len(), 2);
     assert!(config.general.dry_run, "the example must ship safe");
 }
+
+// --- fast-path rules -----------------------------------------------------------
+
+fn with_rules(rules: &str) -> String {
+    format!("{MINIMAL}\n{rules}")
+}
+
+#[test]
+fn a_profile_has_no_rules_unless_its_owner_writes_them() {
+    let c = parse(MINIMAL).unwrap();
+    assert!(c.profile("downloads").unwrap().rules.is_empty(), "nothing is built in");
+}
+
+#[test]
+fn rules_are_read_in_order_and_extensions_are_normalized() {
+    let c = parse(&with_rules(
+        r#"
+[[profiles.rules]]
+name = "usenet"
+category = "documents"
+extensions = [".NZB", "torrent"]
+"#,
+    ))
+    .unwrap();
+    let rules = &c.profile("downloads").unwrap().rules;
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].extensions, vec!["nzb", "torrent"]);
+}
+
+#[test]
+fn a_rule_with_no_criteria_is_refused_because_it_would_match_everything() {
+    let p = problems(&with_rules(
+        r#"
+[[profiles.rules]]
+name = "everything"
+category = "Documents"
+"#,
+    ));
+    assert!(p.iter().any(|m| m.contains("at least one of extensions, name_glob or mime")), "{p:?}");
+}
+
+#[test]
+fn a_rule_must_name_a_declared_category_unless_dynamic_categories_are_on() {
+    let p = problems(&with_rules(
+        r#"
+[[profiles.rules]]
+name = "x"
+category = "Elsewhere"
+extensions = ["nzb"]
+"#,
+    ));
+    assert!(p.iter().any(|m| m.contains("is not one of this profile's categories")), "{p:?}");
+
+    let dynamic = MINIMAL.replace(
+        "categories = [\"Documents\"]",
+        "categories = [\"Documents\"]\nallow_dynamic_categories = true",
+    );
+    parse(&format!(
+        "{dynamic}\n[[profiles.rules]]\nname = \"x\"\ncategory = \"Elsewhere\"\nextensions = [\"nzb\"]\n"
+    ))
+    .expect("a dynamic profile may route a rule to a new category");
+}
+
+#[test]
+fn a_rule_category_must_be_a_safe_directory_name() {
+    let p = problems(&with_rules(
+        r#"
+[[profiles.rules]]
+name = "x"
+category = "../escape"
+extensions = ["nzb"]
+"#,
+    ));
+    assert!(p.iter().any(|m| m.contains("not usable as a single directory name")), "{p:?}");
+}
+
+#[test]
+fn an_extension_written_as_a_glob_is_explained_not_silently_accepted() {
+    let p = problems(&with_rules(
+        r#"
+[[profiles.rules]]
+name = "x"
+category = "Documents"
+extensions = ["*.zip"]
+"#,
+    ));
+    assert!(p.iter().any(|m| m.contains("write `zip`, not `*.zip`")), "{p:?}");
+}
+
+#[test]
+fn a_bad_glob_and_a_duplicate_name_are_both_reported() {
+    let p = problems(&with_rules(
+        r#"
+[[profiles.rules]]
+name = "x"
+category = "Documents"
+name_glob = "[unclosed"
+
+[[profiles.rules]]
+name = "x"
+category = "Documents"
+extensions = ["pdf"]
+"#,
+    ));
+    assert!(p.iter().any(|m| m.contains("name_glob")), "{p:?}");
+    assert!(p.iter().any(|m| m.contains("duplicate rule name `x`")), "{p:?}");
+}
+
+#[test]
+fn a_mime_rule_needs_mime_detection_or_it_could_never_match() {
+    let off = with_rules(
+        r#"
+[profiles.metadata]
+detect_mime = false
+
+[[profiles.rules]]
+name = "pictures"
+category = "Documents"
+mime = "image/*"
+"#,
+    );
+    let p = problems(&off);
+    assert!(p.iter().any(|m| m.contains("needs metadata.detect_mime = true")), "{p:?}");
+
+    parse(&with_rules(
+        r#"
+[[profiles.rules]]
+name = "pictures"
+category = "Documents"
+mime = "image/*"
+"#,
+    ))
+    .expect("detect_mime defaults to true");
+}

@@ -109,6 +109,19 @@ pub(crate) struct RawProfile {
     pub rename: RawRename,
     #[serde(default)]
     pub metadata: RawMetadata,
+    #[serde(default)]
+    pub rules: Vec<RawRule>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawRule {
+    pub name: String,
+    pub category: String,
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    pub name_glob: Option<String>,
+    pub mime: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

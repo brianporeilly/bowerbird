@@ -98,9 +98,7 @@ pub struct Intent<'a> {
 pub enum Origin {
     /// A model proposed it.
     Model,
-    /// A deterministic rule matched and no model was consulted. Not yet
-    /// produced by any code path; the value exists so the rule-based fast path
-    /// does not require a second migration.
+    /// A rule the profile's owner wrote matched, and no model was consulted.
     Rule,
     /// A person initiated it directly, as with a restore or a purge.
     Human,
@@ -142,10 +140,20 @@ impl Provenance {
         Self { origin: Origin::Model, decided_by: DecidedBy::Auto, confidence }
     }
 
-    /// A model proposed it and a person approved it through `bower review`.
+    /// A person approved a queued proposal. `origin` is whoever made the
+    /// proposal, which the queue remembers: approving a rule's proposal is not a
+    /// model decision.
     #[must_use]
-    pub fn model_approved(confidence: Option<f32>) -> Self {
-        Self { origin: Origin::Model, decided_by: DecidedBy::Human, confidence }
+    pub fn approved(origin: Origin, confidence: Option<f32>) -> Self {
+        Self { origin, decided_by: DecidedBy::Human, confidence }
+    }
+
+    /// A person's own rule matched and no model was consulted. No confidence:
+    /// a rule is deterministic, and recording `1.0` would present a certainty
+    /// the model never reported as if it were a measurement.
+    #[must_use]
+    pub fn rule_auto() -> Self {
+        Self { origin: Origin::Rule, decided_by: DecidedBy::Auto, confidence: None }
     }
 
     /// A person initiated it directly: a restore or a purge, which no model
@@ -282,6 +290,8 @@ pub struct ReviewItem {
     pub reasoning: String,
     pub confidence: Option<f32>,
     pub reason: String,
+    /// Who made the proposal, so approving it is journalled truthfully.
+    pub origin: Origin,
 }
 
 /// A new row for the review queue.
@@ -297,6 +307,7 @@ pub struct NewReviewItem<'a> {
     pub reasoning: &'a str,
     pub confidence: Option<f32>,
     pub reason: &'a str,
+    pub origin: Origin,
 }
 
 #[derive(Debug, Clone)]
@@ -547,8 +558,8 @@ impl Store {
         let changed = self.conn.execute(
             "INSERT OR IGNORE INTO review_queue
                (created_at, profile, kind, path, original_path, file_hash,
-                category, proposed_dest, reasoning, confidence, reason)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                category, proposed_dest, reasoning, confidence, reason, origin)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 now_secs(),
                 item.profile,
@@ -561,6 +572,7 @@ impl Store {
                 item.reasoning,
                 item.confidence,
                 item.reason,
+                item.origin.as_str(),
             ],
         )?;
         Ok((changed > 0).then(|| self.conn.last_insert_rowid()))
@@ -573,7 +585,7 @@ impl Store {
     ) -> Result<Vec<ReviewItem>, StateError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, created_at, profile, kind, path, original_path, file_hash,
-                    category, proposed_dest, reasoning, confidence, reason
+                    category, proposed_dest, reasoning, confidence, reason, origin
              FROM review_queue
              WHERE (?1 IS NULL OR profile = ?1) AND (?2 IS NULL OR kind = ?2)
              ORDER BY created_at, id",
@@ -628,7 +640,7 @@ impl Store {
             .conn
             .query_row(
                 "SELECT id, created_at, profile, kind, path, original_path, file_hash,
-                        category, proposed_dest, reasoning, confidence, reason
+                        category, proposed_dest, reasoning, confidence, reason, origin
                  FROM review_queue WHERE id = ?1",
                 params![id],
                 review_from_row,
@@ -787,6 +799,7 @@ fn review_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewItem> {
         reasoning: row.get(9)?,
         confidence: row.get::<_, Option<f32>>(10)?,
         reason: row.get(11)?,
+        origin: Origin::from_str(&row.get::<_, String>(12)?),
     })
 }
 

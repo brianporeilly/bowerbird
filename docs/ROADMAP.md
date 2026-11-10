@@ -18,6 +18,8 @@ is genuinely open it is marked **Open** and says what evidence would settle it.
 | `bower review` / `bower recycle`, `review_placement` | Shipped |
 | Context builder, OpenAI-compatible adapter, structured output | Shipped |
 | Journal provenance ([ADR-0005](ADR-0005-journal-provenance.md)) | Shipped |
+| Rule-based fast path ([ADR-0007](ADR-0007-rule-based-fast-path.md)) | Shipped |
+| `bower journal` | Shipped |
 | Anthropic-compatible adapter | Next, per ADR-0001 §9 |
 
 Deferred by original design, unchanged: watcher daemon, notifications, TUI/GUI,
@@ -147,21 +149,68 @@ which is the design holding up, not an excuse.
 worth keeping with a caveat. If neither does, it should stop being described as
 a safety stage.
 
-Until then, do not add anything that depends on the gate discriminating.
+**Update: a larger model does spread its confidence.** The same 41-file lab
+corpus through Qwen3.8-27B (`PXQN6` variant, llama.cpp on the LAN, `prompt`
+structured output, batch size 4, threshold 0.75):
+
+| Profile | Moved | Held | Held confidence | Moved confidence | Wall time |
+| ------- | ----- | ---- | --------------- | ---------------- | --------- |
+| `qwen38-27b` (no sniff) | 21 | 20 | 0.25–0.72 | 0.75–0.98 (mean 0.92) | 4m30s |
+| `qwen38-27b-sniff` (4000 bytes) | 18 | 23 | 0.30–0.72 | 0.80–0.98 (mean 0.94) | 11m01s |
+
+Against 0.85–0.99 on every file for the 3B, the gate fires here. The files it
+held were the genuinely thin ones: `.json`/`.hex` blobs, an untitled scan, the
+`.nzb`, two near-identical PDFs. Clear files (invoice, letter, report, manual,
+photos) were filed at 0.90 or above. So the third option above — keep the gate,
+document that it is a large-model feature — is supported for this model.
+
+What this does **not** show:
+
+- **Accuracy beyond one hand-labelled corpus.** `scripts/lab.sh score` now
+  scores runs against `lab/labels.toml`. It counts **silent errors**: files
+  moved with no human involved that were wrong, plus files with no right answer
+  in the taxonomy (`"?"`) that were moved at all. On the 41-file corpus
+  (33 answerable, 8 not) the 27B made 0 silent errors in both runs: every file
+  it moved was right and it held all 8 unanswerable ones. The 3B made 18 (10
+  wrong, 8 unanswerable files moved), with mean confidence 0.93 on its
+  correct moves and 0.85 on its wrong ones. The cost of the 27B's caution is
+  coverage: 10 of its 20 held files had a correct proposal. The labels were
+  drafted by Claude after seeing some model output and have not been reviewed
+  by a human, so treat the numbers as indicative, not as a benchmark.
+- **That sniffing helps.** It held *more* files and took 2.4× as long. 4000 bytes
+  of a PDF or zip header is mostly noise, so the gain, if any, is on plain text
+  only. Sniffing should be judged per file type, not as one switch.
+- **That it generalizes.** One model, one corpus of 41 files, one run each.
+  Sampling is not seeded here, so rerun-to-rerun variance is unmeasured.
+
+Still unmeasured, and worth a run before any gate-dependent work: a mid-size
+model (7–14B), to find where the gate stops discriminating.
+
+Until then, do not add anything that depends on the gate discriminating on
+*small* models.
 
 ---
 
 ## Filesystem scope (still the primary product)
 
-### Rule-based fast path
+### Rule-based fast path — shipped
 
-Trivial extension/regex rules (`*.iso` → Installers) skip the model entirely for
-obvious cases. Cheaper, faster, fully deterministic where no judgment is needed.
+User-defined `[[profiles.rules]]` (extension, name glob, MIME) file a match
+without the model. There are no built-in rules, and a rule goes through the same
+policy engine as a model's proposal. See
+[ADR-0007](ADR-0007-rule-based-fast-path.md).
 
-**Architectural note, already acted on:** this introduces a *second producer of
-proposals*. The journal now records `origin` so model and rule decisions are
-distinguishable — see [ADR-0005](ADR-0005-journal-provenance.md). That had to
-land first because the journal is append-only and cannot be backfilled.
+Not done, deliberately: rules that rename, and rules that match on content.
+
+First lab measurement (27B, the 41-file corpus, three extra categories and two
+rules: `nzb`/`torrent` and `*coloring*`): the rules claimed 3 of 41 files, all
+the intended ones, journalled `origin = rule` with no confidence, and the run had
+0 silent errors. **Run time did not improve** (6m30s against 4m30s for the
+baseline), which this does not explain: one run each on a shared server, and
+skipping 3 files is a small saving next to the variance. Whether rules pay for
+themselves in time needs a corpus where they claim a large share, and repeated
+runs. Their value on this corpus is certainty, not speed: those 3 files no
+longer depend on a model getting a category it had never seen right.
 
 ### Learned corrections promoted to rules
 
@@ -171,7 +220,7 @@ it absorbs actual preferences.
 
 Depends on `origin` **and** `decided_by`: correcting a rule means fix the rule;
 correcting the model means adjust a prompt or a threshold. Both are now
-recorded.
+recorded, on the journal and (since ADR-0007) on the review queue too.
 
 ### Link modes: `link_mode = "symlink" | "hardlink" | "move"`
 
@@ -196,8 +245,6 @@ content.
 - **External metadata lookups** (TMDB, MusicBrainz, Open Library) as an optional
   context-builder stage. This is the natural on-ramp to media-library mode and
   needs no new architecture — it slots into the existing context builder.
-- **`bower journal`** — a read surface for the journal. `Store::journal_recent`
-  exists; nothing consumes it from the CLI yet.
 
 ---
 
@@ -241,8 +288,8 @@ overwrite"** is a capability it must require, not assume.
 
 ## Suggested sequencing
 
-1. **Rule-based fast path and link modes.** Cheap, high value, purely additive,
-   no new abstraction. Provenance groundwork is already in place.
+1. ~~**Rule-based fast path**~~ Done — see above. **Link modes** are next: cheap,
+   high value, purely additive, no new abstraction.
 2. **Note-vault support** — as a richer context builder for the filesystem
    target, correctly understood as a feature rather than a second target.
 3. ~~**`bower-llm` decoupling**, on its own merits, once the branches are reviewed.~~

@@ -16,6 +16,7 @@ pub mod lock;
 pub mod model;
 pub mod policy;
 pub mod review;
+pub mod rules;
 pub mod run;
 pub mod scan;
 pub mod state;

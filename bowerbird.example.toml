@@ -142,6 +142,23 @@ extract_audio_tags = false
 extract_pdf_metadata = false
 content_sniff_bytes = 0
 
+# Rules file a match without asking the model, so a file you can name outright
+# costs no tokens and no seconds. None are built in; these are examples.
+#
+# A rule matches when ALL the criteria it sets do, and the first rule that
+# matches wins. A rule goes through the same checks as a model's proposal (it
+# cannot overwrite a file or leave the destination root), but it skips the
+# confidence gate, so a wrong rule moves files with no second look. Dry run first.
+[[profiles.rules]]
+name = "usenet and torrents"
+category = "Media"
+extensions = ["nzb", "torrent"]
+
+[[profiles.rules]]
+name = "iso images"
+category = "Installers"
+extensions = ["iso"]
+
 
 # Routing elsewhere: the inbox stays empty, organized output lands under a
 # separate root.

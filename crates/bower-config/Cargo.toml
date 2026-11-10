@@ -12,6 +12,7 @@ description = "Configuration schema and validation for Bowerbird."
 workspace = true
 
 [dependencies]
+globset = "0.4.20"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"
 toml = "1.1.4"

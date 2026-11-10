@@ -168,7 +168,7 @@ fn approve_move(
         options.mode,
         store,
         Some(&item.file_hash),
-        Provenance::model_approved(item.confidence),
+        Provenance::approved(item.origin, item.confidence),
     );
     let placed = place(&item.path, &base, JournalAction::Move, &ctx)?;
 
@@ -205,7 +205,7 @@ fn approve_recycle(
         options.mode,
         store,
         Some(&item.file_hash),
-        Provenance::model_approved(item.confidence),
+        Provenance::approved(item.origin, item.confidence),
     );
     let stored = place(&item.path, &base, JournalAction::Recycle, &ctx)?;
 

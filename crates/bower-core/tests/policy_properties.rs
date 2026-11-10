@@ -87,6 +87,7 @@ fn profile(rename: Rename, dynamic: bool, on_conflict: OnConflict) -> Profile {
         exclude_patterns: vec![],
         include_subdirs: false,
         rename,
+        rules: vec![],
         metadata: Metadata {
             detect_mime: true,
             extract_exif: false,

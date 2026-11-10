@@ -86,6 +86,7 @@ fn profile(path: &Path) -> Profile {
         exclude_patterns: vec![],
         include_subdirs: true,
         rename: Rename::Disabled,
+        rules: vec![],
         metadata: Metadata {
             detect_mime: false,
             extract_exif: false,

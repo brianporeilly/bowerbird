@@ -142,6 +142,37 @@ Either way, Bowerbird never re-ingests its own output. When organizing in place
 it skips the category subdirectories it manages; when routing elsewhere it skips
 the destination root.
 
+## Rules: skip the model for files you can name
+
+Some files do not need a model. Say so, and they are filed without one:
+
+```toml
+[[profiles.rules]]
+name = "usenet"
+category = "Downloads"
+extensions = ["nzb", "torrent"]
+
+[[profiles.rules]]
+name = "colouring pages"
+category = "Kids"
+name_glob = "*coloring*"      # case-insensitive, against the file name
+
+[[profiles.rules]]
+name = "pictures"
+category = "Photos"
+mime = "image/*"              # needs metadata.detect_mime = true
+```
+
+A rule matches when **all** the criteria it sets do; the first match in file
+order wins. There are no built-in rules: what belongs where is your call, and
+`bower config check` rejects a rule whose category the profile does not allow.
+
+A rule goes through the same policy engine as a model's proposal, so it cannot
+overwrite anything or write outside the destination root, and a collision still
+lands in the review queue. It skips only the model and the confidence gate. The
+journal records these as `origin = rule`, with no confidence. See
+[ADR-0007](docs/ADR-0007-rule-based-fast-path.md).
+
 ## Commands
 
 ```
@@ -246,6 +277,7 @@ Shipped:
   recycle store — with `bower review` and `bower recycle`
 - OpenAI-compatible backend adapter, with batched requests, per-item validation,
   and configurable structured-output enforcement
+- Rule-based fast path: user-defined rules file matching files without a model
 
 Next:
 
@@ -258,8 +290,9 @@ watcher daemon, notifications, TUI/GUI front-ends, media-library conventions.
 [ADR-0002](docs/ADR-0002-implementation-amendments.md),
 [ADR-0003](docs/ADR-0003-state-store-amendments.md),
 [ADR-0004](docs/ADR-0004-structured-output-and-the-openai-adapter.md),
-[ADR-0005](docs/ADR-0005-journal-provenance.md), and
-[ADR-0006](docs/ADR-0006-engine-tokens-and-the-backend-port.md) record where the
+[ADR-0005](docs/ADR-0005-journal-provenance.md),
+[ADR-0006](docs/ADR-0006-engine-tokens-and-the-backend-port.md), and
+[ADR-0007](docs/ADR-0007-rule-based-fast-path.md) record where the
 implementation amends ADR-0001, and why.
 
 [ROADMAP.md](docs/ROADMAP.md) holds the longer view: what is decided, what is

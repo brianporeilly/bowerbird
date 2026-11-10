@@ -150,6 +150,7 @@ dependencies = [
 name = "bower-config"
 version = "0.1.0"
 dependencies = [
+ "globset",
  "serde",
  "thiserror",
  "toml",
