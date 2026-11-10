@@ -11,7 +11,7 @@
 //! keeping the engine pure: the safety guarantees can be tested exhaustively
 //! and adversarially, at unit-test speed.
 
-use bower_config::{Metadata, OnConflict, Profile, Rename};
+use bower_config::{LinkMode, Metadata, OnConflict, Profile, Rename};
 use bower_core::model::{
     DeleteProposal, FileFacts, FileId, FileRecord, NoOpReason, Proposal, ProposalOutcome,
     RawProposal, ResolvedAction,
@@ -40,6 +40,7 @@ fn profile() -> Profile {
         batch_size: 25,
         confidence_threshold: 0.75,
         on_conflict: OnConflict::Quarantine,
+        link_mode: LinkMode::Move,
         stability_wait: Duration::ZERO,
         exclude_patterns: vec![],
         include_subdirs: false,

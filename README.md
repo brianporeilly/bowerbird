@@ -173,6 +173,24 @@ lands in the review queue. It skips only the model and the confidence gate. The
 journal records these as `origin = rule`, with no confidence. See
 [ADR-0007](docs/ADR-0007-rule-based-fast-path.md).
 
+## Linking instead of moving
+
+By default a filed file leaves the inbox. To try the tool without disturbing
+anything, or to keep the inbox as it is and get an organized view beside it:
+
+```toml
+link_mode = "symlink"   # or "hardlink"; the default is "move"
+```
+
+The source stays where it is and the category directories fill with links to
+it. `hardlink` costs no space and survives either name being moved, but needs
+the destination on the same filesystem; it never falls back to copying. `symlink`
+crosses filesystems, and dangles if you later move the source.
+
+A re-run does not ask the model about a file it already linked, and does not
+mistake its own link for a conflict. Delete a link and the next run files that
+source again. See [ADR-0008](docs/ADR-0008-link-modes.md).
+
 ## Commands
 
 ```
@@ -278,6 +296,7 @@ Shipped:
 - OpenAI-compatible backend adapter, with batched requests, per-item validation,
   and configurable structured-output enforcement
 - Rule-based fast path: user-defined rules file matching files without a model
+- Link modes: `hardlink` and `symlink` give an organized view beside an untouched inbox
 
 Next:
 
@@ -291,8 +310,9 @@ watcher daemon, notifications, TUI/GUI front-ends, media-library conventions.
 [ADR-0003](docs/ADR-0003-state-store-amendments.md),
 [ADR-0004](docs/ADR-0004-structured-output-and-the-openai-adapter.md),
 [ADR-0005](docs/ADR-0005-journal-provenance.md),
-[ADR-0006](docs/ADR-0006-engine-tokens-and-the-backend-port.md), and
-[ADR-0007](docs/ADR-0007-rule-based-fast-path.md) record where the
+[ADR-0006](docs/ADR-0006-engine-tokens-and-the-backend-port.md),
+[ADR-0007](docs/ADR-0007-rule-based-fast-path.md), and
+[ADR-0008](docs/ADR-0008-link-modes.md) record where the
 implementation amends ADR-0001, and why.
 
 [ROADMAP.md](docs/ROADMAP.md) holds the longer view: what is decided, what is

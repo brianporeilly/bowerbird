@@ -19,6 +19,7 @@ is genuinely open it is marked **Open** and says what evidence would settle it.
 | Context builder, OpenAI-compatible adapter, structured output | Shipped |
 | Journal provenance ([ADR-0005](ADR-0005-journal-provenance.md)) | Shipped |
 | Rule-based fast path ([ADR-0007](ADR-0007-rule-based-fast-path.md)) | Shipped |
+| Link modes ([ADR-0008](ADR-0008-link-modes.md)) | Shipped |
 | `bower journal` | Shipped |
 | Anthropic-compatible adapter | Next, per ADR-0001 §9 |
 
@@ -222,20 +223,20 @@ Depends on `origin` **and** `decided_by`: correcting a rule means fix the rule;
 correcting the model means adjust a prompt or a threshold. Both are now
 recorded, on the journal and (since ADR-0007) on the review queue too.
 
-### Link modes: `link_mode = "symlink" | "hardlink" | "move"`
+### Link modes — shipped
 
-A symlink tree gives a non-destructive "virtual organized view" beside an
-untouched source. Valuable on its own merits for nervous users and high-stakes
-profiles, not merely as a migration path.
+`link_mode = "move" | "hardlink" | "symlink"`. See
+[ADR-0008](ADR-0008-link-modes.md).
 
-**Hardlink mode is nearly free today.** `exec.rs` already does
-`hard_link(src, dest)` then `remove_file(src)` — hardlink mode is that path
-minus the unlink.
+The roadmap's earlier estimate, "hardlink mode is nearly free", was right about
+the executor and wrong about the cost. Leaving the source in place changes what
+a second run sees: the model would be asked again, its own link would read as a
+conflict, and a changed answer would link the file into a second category. The
+work was making a re-run idempotent, not creating the link.
 
-**Symlink mode is not symmetric** and is a real feature, not a flag. Two
-decisions need revisiting: the scanner skips symlinks by design, and the
-collision check hashes the destination, which for a symlink is the *target's*
-content.
+Still open: **undo** (the journal has everything needed to remove a run's links,
+and removing a link loses nothing; no command does it) and re-pointing links
+when a source moves.
 
 ### Other filesystem work
 
@@ -288,8 +289,7 @@ overwrite"** is a capability it must require, not assume.
 
 ## Suggested sequencing
 
-1. ~~**Rule-based fast path**~~ Done — see above. **Link modes** are next: cheap,
-   high value, purely additive, no new abstraction.
+1. ~~**Rule-based fast path** and **link modes**~~ Done — see above.
 2. **Note-vault support** — as a richer context builder for the filesystem
    target, correctly understood as a feature rather than a second target.
 3. ~~**`bower-llm` decoupling**, on its own merits, once the branches are reviewed.~~

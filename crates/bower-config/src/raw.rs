@@ -8,7 +8,7 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
-use crate::{OnConflict, Provider, ReviewPlacement, StructuredOutput};
+use crate::{LinkMode, OnConflict, Provider, ReviewPlacement, StructuredOutput};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,6 +99,8 @@ pub(crate) struct RawProfile {
     pub confidence_threshold: Option<f32>,
     #[serde(default)]
     pub on_conflict: OnConflict,
+    #[serde(default)]
+    pub link_mode: LinkMode,
     #[serde(default)]
     pub stability_wait_minutes: u64,
     #[serde(default)]

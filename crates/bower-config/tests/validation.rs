@@ -405,3 +405,30 @@ mime = "image/*"
     ))
     .expect("detect_mime defaults to true");
 }
+
+// --- link modes ----------------------------------------------------------------
+
+#[test]
+fn files_are_moved_unless_the_owner_asks_for_links() {
+    use bower_config::LinkMode;
+    let c = parse(MINIMAL).unwrap();
+    assert_eq!(c.profile("downloads").unwrap().link_mode, LinkMode::Move);
+}
+
+#[test]
+fn link_modes_parse_and_a_misspelling_is_an_error() {
+    use bower_config::LinkMode;
+    for (word, want) in [("hardlink", LinkMode::Hardlink), ("symlink", LinkMode::Symlink)] {
+        let text = MINIMAL.replace(
+            "categories = [\"Documents\"]",
+            &format!("categories = [\"Documents\"]\nlink_mode = \"{word}\""),
+        );
+        assert_eq!(parse(&text).unwrap().profile("downloads").unwrap().link_mode, want);
+    }
+
+    let typo = MINIMAL.replace(
+        "categories = [\"Documents\"]",
+        "categories = [\"Documents\"]\nlink_mode = \"link\"",
+    );
+    assert!(parse(&typo).is_err(), "an unknown mode must not silently fall back to moving");
+}

@@ -6,7 +6,7 @@
 //! the collision check the engine hands back, the content hashing behind
 //! remembered rejections, and every write to the state store.
 
-use bower_config::{Profile, ReviewPlacement};
+use bower_config::{LinkMode, Profile, ReviewPlacement};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -163,7 +163,8 @@ pub fn run_profile(
     let mut scan_options = options.scan.clone();
     scan_options.extra_excluded_roots.extend(store.managed_dirs(&profile.name)?);
 
-    let scanned = scan::scan(profile, &scan_options)?;
+    let mut scanned = scan::scan(profile, &scan_options)?;
+    skip_already_linked(profile, store, &mut scanned)?;
     let mut report = RunReport {
         profile: profile.name.clone(),
         scanned: scanned.files.len(),
@@ -216,6 +217,44 @@ pub fn run_profile(
     }
 
     Ok(report)
+}
+
+/// Drops files an earlier run already linked into their category, when the link
+/// is still in place.
+///
+/// A link mode leaves the source in the inbox, so every run would otherwise see
+/// it as new: asking the model again (slow), and if the model answered
+/// differently, linking it somewhere else too. The journal remembers where each
+/// source went; a file is skipped only while that link still exists, so
+/// deleting a link makes the next run file the source again.
+///
+/// Does nothing under `link_mode = "move"`, where a filed file has left.
+fn skip_already_linked(
+    profile: &Profile,
+    store: &Store,
+    scanned: &mut scan::ScanReport,
+) -> Result<(), RunError> {
+    let action = match profile.link_mode {
+        LinkMode::Move => return Ok(()),
+        LinkMode::Hardlink => JournalAction::Hardlink,
+        LinkMode::Symlink => JournalAction::Symlink,
+    };
+    let linked = store.linked_sources(&profile.name, action)?;
+    if linked.is_empty() {
+        return Ok(());
+    }
+
+    let (done, todo): (Vec<_>, Vec<_>) =
+        std::mem::take(&mut scanned.files).into_iter().partition(|f| {
+            linked
+                .get(&f.path)
+                .is_some_and(|dest| exec::is_link_to(dest, &f.path, profile.link_mode))
+        });
+    scanned.files = todo;
+    for f in done {
+        scanned.skipped.push(Skipped { path: f.path, reason: scan::SkipReason::AlreadyLinked });
+    }
+    Ok(())
 }
 
 /// Builds the executor's context, routing a dry run's journal writes into a
@@ -343,7 +382,7 @@ fn decide_and_execute(
                         proposed: None,
                     };
                 }
-                let found = match occupancy(pending.dest.as_path(), hasher) {
+                let found = match occupancy(pending.dest.as_path(), &file.path, hasher) {
                     Ok(o) => o,
                     Err(e) => {
                         return failed(
@@ -367,7 +406,7 @@ fn decide_and_execute(
     let known_hash = hasher.peek().map(str::to_owned);
     let ctx = context(profile, options, store, known_hash.as_deref(), origin, confidence);
 
-    match exec::apply(&action, &file.path, &ctx) {
+    match exec::apply_via(&action, &file.path, &ctx, profile.link_mode) {
         Ok(Executed::Deferred(pending)) => {
             defer(file, origin, action, &pending, profile, options, store, hasher)
         }
@@ -539,12 +578,21 @@ fn observe(path: &Path) -> Option<FileFacts> {
 
 /// Decides what, if anything, occupies `dest`. Hashes only when there is
 /// actually something there.
-fn occupancy(dest: &Path, hasher: &mut LazyHash<'_>) -> std::io::Result<Occupancy> {
+///
+/// `source` is the file being placed. A link at `dest` that already leads to it
+/// is that file's own earlier placement, not a conflict: without this, a re-run
+/// of a link mode would quarantine its own work as "a different file".
+fn occupancy(dest: &Path, source: &Path, hasher: &mut LazyHash<'_>) -> std::io::Result<Occupancy> {
     let meta = match std::fs::symlink_metadata(dest) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Occupancy::Vacant),
         Err(e) => return Err(e),
     };
+    if exec::is_link_to(dest, source, LinkMode::Symlink)
+        || exec::is_link_to(dest, source, LinkMode::Hardlink)
+    {
+        return Ok(Occupancy::Identical);
+    }
     // A directory or symlink at the destination is never "the same file",
     // whatever its contents.
     if !meta.is_file() {

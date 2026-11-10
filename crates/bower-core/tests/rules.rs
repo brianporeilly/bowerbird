@@ -7,7 +7,7 @@
 )]
 //! The rule-based fast path: matching, bypassing the model, and provenance.
 
-use bower_config::{Metadata, OnConflict, Profile, Rename, ReviewPlacement, Rule};
+use bower_config::{LinkMode, Metadata, OnConflict, Profile, Rename, ReviewPlacement, Rule};
 use bower_core::context::BatchContext;
 use bower_core::exec::Mode;
 use bower_core::hash;
@@ -95,6 +95,7 @@ fn profile(path: &Path, rules: Vec<Rule>) -> Profile {
         batch_size: 25,
         confidence_threshold: 0.75,
         on_conflict: OnConflict::Quarantine,
+        link_mode: LinkMode::Move,
         stability_wait: Duration::ZERO,
         exclude_patterns: vec![],
         include_subdirs: false,

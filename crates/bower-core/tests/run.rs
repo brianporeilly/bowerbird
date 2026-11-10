@@ -7,7 +7,7 @@
 )]
 //! The orchestrator end to end, against real directories and a real store.
 
-use bower_config::{Metadata, OnConflict, Profile, Rename, ReviewPlacement};
+use bower_config::{LinkMode, Metadata, OnConflict, Profile, Rename, ReviewPlacement};
 use bower_core::context::BatchContext;
 use bower_core::exec::Mode;
 use bower_core::llm::{BatchResponse, LlmBackend, LlmError};
@@ -74,6 +74,7 @@ fn profile(path: &Path) -> Profile {
         batch_size: 25,
         confidence_threshold: 0.75,
         on_conflict: OnConflict::Quarantine,
+        link_mode: LinkMode::Move,
         stability_wait: Duration::ZERO,
         exclude_patterns: vec![],
         include_subdirs: true,
