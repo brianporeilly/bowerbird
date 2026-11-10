@@ -244,7 +244,7 @@ fn when_every_file_matches_a_rule_the_model_is_not_called_at_all() {
     let report = run_profile(&p, &backend, &options(), &store).unwrap();
 
     assert_eq!(report.moved(), 2);
-    assert!(backend.asked().is_empty());
+    assert!(backend.asked().is_empty(), "no file needed the model, so it must not be called");
 }
 
 #[test]
@@ -270,7 +270,7 @@ fn a_rule_move_is_journalled_as_a_rule_decision_with_no_invented_confidence() {
     run_profile(&p, &Recording::new("Documents"), &options(), &store).unwrap();
 
     let rows = store.journal_recent(None, 10).unwrap();
-    assert!(!rows.is_empty());
+    assert!(!rows.is_empty(), "the move must have been journalled");
     for row in &rows {
         assert_eq!(row.provenance.origin, Origin::Rule);
         assert_eq!(row.provenance.decided_by, DecidedBy::Auto);
@@ -350,7 +350,7 @@ fn approving_a_rules_queued_proposal_is_journalled_as_the_rules_not_the_models()
         .unwrap();
 
     let rows = store.journal_recent(None, 10).unwrap();
-    assert!(!rows.is_empty());
+    assert!(!rows.is_empty(), "the move must have been journalled");
     for row in &rows {
         assert_eq!(row.provenance.origin, Origin::Rule, "a rule proposed it");
         assert_eq!(row.provenance.decided_by, DecidedBy::Human, "a person approved it");
