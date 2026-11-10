@@ -16,6 +16,7 @@
 #   ./scripts/lab.sh run qwen3b            one model
 #   ./scripts/lab.sh run --all             every enabled profile, in sequence
 #   ./scripts/lab.sh compare               where the models disagree
+#   ./scripts/lab.sh score [-v] [profile]  who is right, against lab/labels.toml
 #   ./scripts/lab.sh reset                 wipe runs and state, keep the corpus
 
 set -euo pipefail
@@ -286,6 +287,20 @@ cmd_compare() {
     python3 "$REPO/scripts/lab_compare.py" "$LAB/state.db"
 }
 
+# Scores each profile against hand-written labels. Where `compare` shows who
+# disagrees, this says who is right -- and, more to the point, how many wrong
+# answers were moved with no human in the loop. Labels are yours to write; see
+# the header of scripts/lab_score.py for the format.
+cmd_score() {
+    need_config
+    [ -f "$LAB/state.db" ] || die "no runs yet. Run: ./scripts/lab.sh run --all"
+    local labels="${BOWER_LABELS:-$LAB/labels.toml}"
+    [ -f "$labels" ] || die "no $labels. See the header of scripts/lab_score.py"
+    local verbose=()
+    if [ "${1:-}" = "-v" ]; then verbose=(-v); shift; fi
+    python3 -I "$REPO/scripts/lab_score.py" ${verbose[@]+"${verbose[@]}"} "$LAB/state.db" "$labels" "$@"
+}
+
 cmd_reset() {
     rm -rf "$LAB/runs" "$LAB/state.db" "$LAB/locks" "$LAB/quarantine"
     mkdir -p "$LAB/runs" "$LAB/locks"
@@ -297,9 +312,10 @@ case "${1:-}" in
     corpus)  shift; cmd_corpus "$@" ;;
     run)     shift; cmd_run "$@" ;;
     compare) shift; cmd_compare "$@" ;;
+    score)   shift; cmd_score "$@" ;;
     reset)   shift; cmd_reset "$@" ;;
     *)
-        sed -n '3,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        sed -n '3,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
         exit 1
         ;;
 esac
