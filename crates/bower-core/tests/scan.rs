@@ -193,7 +193,10 @@ fn symlinks_are_never_followed_or_moved() {
 
     let report = scan(&p, &ScanOptions::default()).unwrap();
     assert_eq!(names(&report), ["real.pdf"], "a symlink must never become an input");
-    assert!(!skipped_for(&report, &SkipReason::Symlink).is_empty());
+    assert!(
+        !skipped_for(&report, &SkipReason::Symlink).is_empty(),
+        "the symlink should be reported as skipped, not silently ignored"
+    );
 }
 
 #[test]
