@@ -190,6 +190,55 @@ model (7–14B), to find where the gate stops discriminating.
 Until then, do not add anything that depends on the gate discriminating on
 *small* models.
 
+### Measured: an embedding classifier cannot be the auto-file tier
+
+Prototype: `scripts/lab_embed.py`. EmbeddingGemma-300M (Q8_0, llama.cpp
+`--embeddings`) embeds each file's name and MIME type and each category name;
+the nearest category wins and the margin between the top two is the gate. It
+sees exactly what the 27B sees at `content_sniff_bytes = 0`. It is fast (52
+files in 3.6s against 9 minutes for the 27B), and it is measured rather than
+asked.
+
+On the 41-file corpus a margin of at least 0.03 filed 19 files, all correct. The
+gate was chosen on that corpus, so it was then tested on a **held-out** set: 52
+files from a different part of Downloads (homelab, dev and 3D-print files),
+38 of them hand-labelled (19 answerable, 19 with no right answer), labelled
+before any classifier saw them, gate fixed in advance. Credential-bearing files
+were replaced by same-name, same-MIME stand-ins, so only names, sizes and MIME
+types were ever read.
+
+| Held-out, 38 labelled | Moved | Right | Wrong | "?" moved | Silent errors |
+| --------------------- | ----- | ----- | ----- | --------- | ------------- |
+| Embedding, margin 0.03 | 22 | 15 | 0 | 7 | **7** |
+| `qwen38-27b` | 19 | 19 | 0 | 0 | **0** |
+
+The embedding never picked a wrong category for a file that had a right answer.
+It filed files that had none: five Omada router backups and a `.3mf` as
+Archives, a `standard-install.yaml` as Installers, all with margins of 0.043 to
+0.048. The margin says one category beat the others, not that any of them fits,
+so it cannot detect "none of these". Raising the gate does not help: at 0.05
+nothing wrong is filed but only 8 files are, and the correct archives (0.04–0.07)
+overlap the wrong ones.
+
+An explicit "none of these" pseudo-category did not fix it. Three phrasings
+were tried on both sets: one never won (identical to baseline), one won almost
+every time (almost nothing filed), one held everything on the held-out set and
+filed six files on the first corpus. The result tracks the wording, not the
+file, and the phrasings were tried on the test set, so even a good result would
+have been suspect.
+
+The 27B held all 19 unanswerable held-out files and filed all 19 answerable ones
+correctly, with mean confidence 0.89 on its moves. It made no mistakes, so this
+run says nothing new about whether its confidence separates right from wrong.
+
+**Decision:** do not build the embedding tier. It would sit between rules and
+the model, and the only files it could safely take are ones the model already
+handles correctly. Revisit only for ranking candidates, or if a measured way to
+detect "no category fits" turns up.
+
+Caveats: 19 answerable files, 15 of them archives; the 27B was tested on names
+and MIME types only, never on content (the stand-ins have none); one run each.
+
 ---
 
 ## Filesystem scope (still the primary product)
