@@ -32,6 +32,7 @@ import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+NONE = "(none)"
 GATES = (0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.07, 0.10)
 
 # Hypothetical. The config has no per-category description today; these exist
@@ -120,6 +121,9 @@ def main():
     ap.add_argument("--described", action="store_true")
     ap.add_argument("--labels", default=str(REPO / "lab" / "labels.toml"),
                     help="hand labels to score against (default lab/labels.toml)")
+    ap.add_argument("--none", metavar="TEXT",
+                    help="add a pseudo-category with this text; a file it wins is held, "
+                         "never filed (tests an explicit 'none of these' option)")
     ap.add_argument("--reference", help="profile to treat as the reference when scoring the margin gate")
     args = ap.parse_args()
 
@@ -138,6 +142,9 @@ def main():
     file_texts = [f"{prefix}file name: {p.name} | type: {mime_of(p)}" for p in files]
 
     started = time.monotonic()
+    if args.none:
+        categories = [*categories, NONE]
+        cat_texts.append(f"{prefix}{args.none}")
     cat_vecs = embed(args.endpoint, cat_texts)
     file_vecs = embed(args.endpoint, file_texts)
     took = time.monotonic() - started
@@ -159,7 +166,10 @@ def main():
             if o != "·":
                 agree[p][1] += 1
                 agree[p][0] += o == cat
-        rows.append((top - second, path.name, cat, top, others))
+        margin = top - second
+        if cat == NONE:
+            margin = -1.0  # the model said "none of these": never filed at any gate
+        rows.append((margin, path.name, cat, top, others))
 
     for margin, name, cat, top, others in sorted(rows, key=lambda r: r[1].lower()):
         print(f"{name[:width]:<{width}}  {cat:<16} {top:5.2f} {margin:6.3f}  "
@@ -187,7 +197,7 @@ def main():
                       f"agree {sum(kept)}/{len(kept)}")
     if Path(args.labels).is_file():
         score_against_labels(rows, args.labels)
-    margins = sorted(r[0] for r in rows)
+    margins = sorted(r[0] for r in rows if r[0] >= 0)
     print(f"  margin (top1 - top2): min {margins[0]:.3f}, median "
           f"{margins[len(margins) // 2]:.3f}, max {margins[-1]:.3f}")
 
