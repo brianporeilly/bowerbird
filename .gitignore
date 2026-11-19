@@ -9,3 +9,4 @@
 
 # Model-comparison lab: real files, real results, never committed.
 /lab/
+__pycache__/
