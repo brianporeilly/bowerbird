@@ -681,3 +681,65 @@ fn a_symlink_run_says_so_leaves_the_source_and_is_quiet_the_second_time() {
 
     run().assert().code(OK).stdout(contains("already linked")).stdout(contains("nothing to do"));
 }
+
+/// Runs `bower` with `args` against a config. Local to the undo tests.
+fn bower_with(config: &Path, args: &[&str]) -> Command {
+    let mut cmd = Command::cargo_bin("bower").unwrap();
+    cmd.arg("--config").arg(config).args(args);
+    cmd
+}
+
+#[test]
+fn undo_removes_a_symlink_runs_links_and_keeps_every_source() {
+    let f = Fixture::new();
+    let config = f.config_with(0.0, "link_mode = \"symlink\"");
+    bower_with(&config, &["run", "-p", "downloads", "--stub-llm", "--execute"]).assert().code(OK);
+    let link = f.root().join("downloads/Documents/acme-invoice.pdf");
+    assert!(fs::symlink_metadata(&link).is_ok());
+
+    // The plan alone changes nothing.
+    bower_with(&config, &["undo", "--dry-run"]).assert().code(OK).stdout(contains("would unlink"));
+    assert!(fs::symlink_metadata(&link).is_ok());
+
+    bower_with(&config, &["undo", "--yes"]).assert().code(OK).stdout(contains("UNLINK"));
+    assert!(fs::symlink_metadata(&link).is_err(), "the link is gone");
+    assert_eq!(
+        fs::read_to_string(f.root().join("downloads/acme-invoice.pdf")).unwrap(),
+        "invoice",
+        "the source is untouched"
+    );
+
+    bower_with(&config, &["journal", "--limit", "50"]).assert().stdout(contains("unlink"));
+    bower_with(&config, &["undo", "--yes"]).assert().code(OK).stdout(contains("no links to undo"));
+}
+
+#[test]
+fn undo_refuses_to_run_unattended_without_yes() {
+    let f = Fixture::new();
+    let config = f.config_with(0.0, "link_mode = \"symlink\"");
+    bower_with(&config, &["run", "-p", "downloads", "--stub-llm", "--execute"]).assert().code(OK);
+    bower_with(&config, &["undo"]).assert().code(ERROR).stderr(contains("--yes"));
+    assert!(fs::symlink_metadata(f.root().join("downloads/Documents/acme-invoice.pdf")).is_ok());
+}
+
+#[test]
+fn undo_leaves_a_file_someone_saved_over_a_link_and_says_so() {
+    let f = Fixture::new();
+    let config = f.config_with(0.0, "link_mode = \"symlink\"");
+    bower_with(&config, &["run", "-p", "downloads", "--stub-llm", "--execute"]).assert().code(OK);
+    let link = f.root().join("downloads/Documents/acme-invoice.pdf");
+    fs::remove_file(&link).unwrap();
+    fs::write(&link, "my own edits").unwrap();
+
+    bower_with(&config, &["undo", "--yes"]).assert().code(ATTENTION).stdout(contains("left alone"));
+    assert_eq!(fs::read_to_string(&link).unwrap(), "my own edits");
+}
+
+#[test]
+fn undo_does_nothing_for_a_move_run() {
+    let f = Fixture::new();
+    let config = f.config(0.0);
+    bower_with(&config, &["run", "-p", "downloads", "--stub-llm", "--execute"]).assert().code(OK);
+    bower_with(&config, &["undo", "--yes"]).assert().code(OK).stdout(contains("no links to undo"));
+    assert!(f.root().join("downloads/Documents/acme-invoice.pdf").is_file());
+}

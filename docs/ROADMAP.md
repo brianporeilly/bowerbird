@@ -283,9 +283,9 @@ a second run sees: the model would be asked again, its own link would read as a
 conflict, and a changed answer would link the file into a second category. The
 work was making a re-run idempotent, not creating the link.
 
-Still open: **undo** (the journal has everything needed to remove a run's links,
-and removing a link loses nothing; no command does it) and re-pointing links
-when a source moves.
+`bower undo` removes a link-mode run's links, checking the disk first and
+leaving alone anything that is no longer the link that was made (see ADR-0008).
+Still open: re-pointing links when a source moves.
 
 ### Other filesystem work
 

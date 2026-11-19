@@ -256,7 +256,7 @@ fn fetch_recycled(store: &Store, id: i64) -> Result<RecycleItem> {
 ///
 /// Without a terminal there is nobody to ask, so `--yes` becomes mandatory
 /// rather than the prompt being silently skipped.
-fn confirm(assume_yes: bool, question: &str) -> Result<bool> {
+pub(crate) fn confirm(assume_yes: bool, question: &str) -> Result<bool> {
     if assume_yes {
         return Ok(true);
     }

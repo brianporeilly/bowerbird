@@ -61,6 +61,9 @@ pub enum JournalAction {
     /// Added a symbolic link at the destination pointing at the source, which
     /// stays in place (`link_mode = "symlink"`).
     Symlink,
+    /// Removed a link that a link-mode run made. Only ever a link: `bower undo`
+    /// checks that the path is still the link it created before touching it.
+    Unlink,
     /// Moved to the holding folder under `review_placement = "quarantine"`.
     Quarantine,
     /// Moved into the recycle store after a human approved a deletion.
@@ -78,6 +81,7 @@ impl JournalAction {
             Self::MoveAndRename => "move_and_rename",
             Self::Hardlink => "hardlink",
             Self::Symlink => "symlink",
+            Self::Unlink => "unlink",
             Self::Quarantine => "quarantine",
             Self::Recycle => "recycle",
             Self::Restore => "restore",
@@ -99,6 +103,17 @@ pub struct Intent<'a> {
     pub file_hash: Option<&'a str>,
     /// What proposed this, and who let it through.
     pub provenance: Provenance,
+}
+
+/// One link a link-mode run made, as the journal recorded it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkRecord {
+    pub profile: String,
+    /// A symlink; otherwise a hard link.
+    pub symlink: bool,
+    pub source: PathBuf,
+    pub dest: PathBuf,
+    pub at: i64,
 }
 
 /// What produced a proposal.
@@ -579,6 +594,39 @@ impl Store {
             Ok((PathBuf::from(row.get::<_, String>(0)?), PathBuf::from(row.get::<_, String>(1)?)))
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?.into_iter().collect())
+    }
+
+    /// Every link a link-mode run committed, oldest first, optionally limited to
+    /// one profile and to rows at or after `since` (seconds since the epoch).
+    ///
+    /// This is what `bower undo` plans from. It reports what the journal says
+    /// was made, not what is on disk now: the caller checks the disk, because
+    /// the journal cannot know whether a link was since moved or replaced.
+    pub fn link_history(
+        &self,
+        profile: Option<&str>,
+        since: Option<u64>,
+    ) -> Result<Vec<LinkRecord>, StateError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT profile, action, source, dest, at FROM journal
+             WHERE phase = 'committed' AND action IN ('hardlink','symlink')
+               AND dest IS NOT NULL
+               AND (?1 IS NULL OR profile = ?1)
+               AND (?2 IS NULL OR at >= ?2)
+             ORDER BY id",
+        )?;
+        let since = since.map(|s| i64::try_from(s).unwrap_or(i64::MAX));
+        let rows = stmt.query_map(params![profile, since], |row| {
+            let action: String = row.get(1)?;
+            Ok(LinkRecord {
+                profile: row.get(0)?,
+                symlink: action == "symlink",
+                source: PathBuf::from(row.get::<_, String>(2)?),
+                dest: PathBuf::from(row.get::<_, String>(3)?),
+                at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     // -- review queue -------------------------------------------------------

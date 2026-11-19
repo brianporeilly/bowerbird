@@ -20,6 +20,7 @@ pub mod rules;
 pub mod run;
 pub mod scan;
 pub mod state;
+pub mod undo;
 
 /// The machine's current offset from UTC, in seconds east.
 ///
