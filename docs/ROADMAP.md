@@ -239,6 +239,32 @@ detect "no category fits" turns up.
 Caveats: 19 answerable files, 15 of them archives; the 27B was tested on names
 and MIME types only, never on content (the stand-ins have none); one run each.
 
+### Measured: content sniffing decides files that names cannot
+
+The first corpus said sniffing did nothing (see above), but its file names were
+informative. A synthetic set (`scripts/lab_content_set.py`, 22 text files, 13
+answerable and 9 with no right answer, labels written before the run) gives
+files bland names such as `scan_0001.txt` and three deliberately misleading
+ones: a letter named `invoice_final.txt`, a recipe named `report.txt`, a poem
+named `manual.txt`. Same 27B, threshold 0.75:
+
+| Profile | Moved | Right | Wrong | "?" moved | Silent errors | Held |
+| ------- | ----- | ----- | ----- | --------- | ------------- | ---- |
+| `qwen38-27b` (names only) | 4 | 3 | 1 | 2 | **3** | 18 |
+| `qwen38-27b-sniff` (4000 bytes) | 13 | 13 | 0 | 0 | **0** | 9 |
+
+Without content the model held 9 of 13 answerable files (most at 0.20–0.45) and
+trusted the three misleading names, which are all three of its silent errors
+(0.85–0.95). With content it filed all 13 correctly, at 0.85–0.99, held all 9
+unanswerable files, and was not fooled by any name.
+
+So sniffing is a per-file-type decision, as suspected: it was noise on zip and
+PDF headers and is decisive on plain text. It also shows that name-only
+confidence can be high and wrong when the name misleads.
+
+Caveats: synthetic, clean, short English text; 3 misleading names; one run
+each. It shows content *can* help, not how much on messy real documents.
+
 ---
 
 ## Filesystem scope (still the primary product)
