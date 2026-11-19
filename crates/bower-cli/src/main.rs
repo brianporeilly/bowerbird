@@ -14,6 +14,7 @@ mod cli;
 mod journal;
 mod report;
 mod triage;
+mod undo;
 
 use anyhow::{Context, Result, bail};
 use bower_config::{Config, Profile, Rename};
@@ -60,6 +61,11 @@ fn dispatch(cli: &Cli) -> Result<u8> {
             let config = load(&resolve_config_path(cli.config.as_deref())?)?;
             let store = open_store(&config)?;
             journal::show(&store, args)
+        }
+        Command::Undo(args) => {
+            let config = load(&resolve_config_path(cli.config.as_deref())?)?;
+            let store = open_store(&config)?;
+            undo::run(&store, args)
         }
         Command::Config { command } => match command {
             ConfigCommand::Check => cmd_config_check(cli.config.as_deref()),

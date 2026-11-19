@@ -189,7 +189,10 @@ crosses filesystems, and dangles if you later move the source.
 
 A re-run does not ask the model about a file it already linked, and does not
 mistake its own link for a conflict. Delete a link and the next run files that
-source again. See [ADR-0008](docs/ADR-0008-link-modes.md).
+source again. `bower undo` removes the links a run made: it never touches a
+source, leaves alone anything that is no longer the link it made, and keeps a
+hard link whose source is gone, since that is the last copy. It does not undo
+moves. See [ADR-0008](docs/ADR-0008-link-modes.md).
 
 ## Commands
 
@@ -210,6 +213,9 @@ bower review list [--profile N] [--type T]       what is waiting on a decision
 bower review show <id>                           one item in full
 bower review approve <id> | --all [--yes]        carry the decision out
 bower review reject <id> [--reason "..."]        refuse it, and remember
+
+bower undo [--profile N] [--since 2h]            remove the links link-mode runs made
+bower undo --dry-run                             list what it would remove
 
 bower recycle list                               what has been recycled
 bower recycle restore <id>                       put it back

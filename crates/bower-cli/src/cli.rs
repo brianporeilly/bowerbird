@@ -36,6 +36,8 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ReviewCommand,
     },
+    /// Remove the links a link-mode run made. Never touches a source file.
+    Undo(UndoArgs),
     /// Inspect and restore files moved to the recycle store.
     Recycle {
         #[command(subcommand)]
@@ -151,6 +153,23 @@ pub(crate) struct PurgeArgs {
     #[arg(long)]
     pub(crate) dry_run: bool,
     /// Skip the confirmation prompt.
+    #[arg(long, short = 'y')]
+    pub(crate) yes: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct UndoArgs {
+    /// Only undo links made by this profile.
+    #[arg(long, short = 'p')]
+    pub(crate) profile: Option<String>,
+    /// Only undo links made more recently than this, e.g. 2h, 1d. Without it,
+    /// every link in the journal that still exists is a candidate.
+    #[arg(long, value_name = "DURATION")]
+    pub(crate) since: Option<String>,
+    /// List what would be removed without removing it.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+    /// Skip the confirmation prompt. Required when not on a terminal.
     #[arg(long, short = 'y')]
     pub(crate) yes: bool,
 }

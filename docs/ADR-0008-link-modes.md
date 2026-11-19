@@ -91,6 +91,28 @@ file out of the inbox.
 
 ## Not done
 
-- **Undo.** The journal has everything needed to remove the links a run made, and
-  removing a link loses nothing. No command does it yet.
 - **Re-pointing links** when a source moves.
+
+## Undo
+
+`bower undo [--profile P] [--since 2h] [--dry-run] [--yes]` removes the links
+link-mode runs made. It plans from the journal's committed `hardlink`/`symlink`
+rows (latest per destination) and checks the disk before every removal, because
+the journal says what was made and not what is there now:
+
+- A path that is still the link that was made is removed and journalled as
+  `unlink`, `origin=human`.
+- A path that is now something else (a file saved over it, a symlink repointed
+  by hand) is **left alone** and reported, with exit code 2.
+- A hard link whose source has been deleted is **left alone**: it is now the only
+  name the file has, so removing it would destroy the last copy.
+- A link that is already gone is skipped, so undoing twice is harmless.
+
+It never touches a source file, and it does not undo *moves*. Undoing a move
+means moving a file back over whatever may have happened since, which is a
+different operation with a different failure mode. The recycle store already
+has its own `restore`.
+
+A re-run after an undo files the same sources again, because the journal's
+record of the link no longer matches the disk. Change the profile or its
+`link_mode` first if that is not what is wanted.

@@ -357,6 +357,59 @@ pub fn is_link_to(dest: &Path, src: &Path, via: LinkMode) -> bool {
     }
 }
 
+/// What stands at the path a link-mode run created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkState {
+    /// Still the link that run made. Safe to remove.
+    Ours,
+    /// Nothing there any more.
+    Gone,
+    /// Something is there, but it is not the link the journal describes: a file
+    /// someone saved over it, or a link repointed by hand. Never touched.
+    Changed,
+    /// A hard link whose source has vanished. The link is now the only name the
+    /// file has, so removing it would delete the last copy. Never touched.
+    LastCopy,
+}
+
+/// Looks at `dest` without changing anything.
+#[must_use]
+pub fn link_state(dest: &Path, src: &Path, via: LinkMode) -> LinkState {
+    if fs::symlink_metadata(dest).is_err() {
+        return LinkState::Gone;
+    }
+    if !is_link_to(dest, src, via) {
+        // A hard link whose source is gone no longer compares equal to it, but
+        // that is not "changed": it is the file's last name. Tell them apart.
+        if via == LinkMode::Hardlink
+            && fs::symlink_metadata(src).is_err()
+            && fs::symlink_metadata(dest).is_ok_and(|m| m.is_file())
+        {
+            return LinkState::LastCopy;
+        }
+        return LinkState::Changed;
+    }
+    LinkState::Ours
+}
+
+/// Removes `dest` if, and only if, it is still the link a run made.
+///
+/// The check and the removal are one step here so no caller can remove a path
+/// it did not verify. Removing a link loses nothing -- the source is untouched
+/// -- but removing a *file* that merely sits at the same path would, which is
+/// why [`LinkState::Changed`] and [`LinkState::LastCopy`] are refused.
+pub fn remove_link(dest: &Path, src: &Path, via: LinkMode) -> Result<LinkState, ExecError> {
+    let state = link_state(dest, src, via);
+    if state == LinkState::Ours {
+        fs::remove_file(dest).map_err(|source| ExecError::Io {
+            op: "remove the link at",
+            path: dest.to_path_buf(),
+            source,
+        })?;
+    }
+    Ok(state)
+}
+
 /// Whether two paths are the same file on disk -- a hard link of each other --
 /// without following a symlink at `a`.
 #[cfg(unix)]
